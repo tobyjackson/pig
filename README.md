@@ -1,9 +1,17 @@
 # pig
 
-pig is a small coding agent that runs in your terminal, written in Go. It is
-a replica of [pi](https://pi.dev): the model gets four tools (read, write,
-edit, bash) and a short system prompt. Everything else is added by you,
-through skills, prompt templates, and extensions.
+pig is a small coding agent that runs in your terminal, written in Go. It is a
+port of [pi](https://github.com/earendil-works/pi), keeping pi's core design:
+the model gets four tools (read, write, edit, bash) and a short system prompt.
+Everything else is added by you, through skills, prompt templates, and
+extensions.
+
+pig is not a fork and does not track pi. pi has since grown to eight tools
+(add find, grep, ls, powershell) and twelve packages; pig stays deliberately
+small. See [Differences from pi](#differences-from-pi).
+
+pig contains material ported from pi, which is MIT licensed. See
+[LICENSE](LICENSE).
 
 ## Install
 
@@ -127,7 +135,15 @@ Run `pig docs <topic>` or open the `docs/` folder:
 
 ## Differences from pi
 
-pig follows pi's design closely but is not byte-for-byte compatible:
+pig started as a port of pi and has since diverged. It is not byte-for-byte
+compatible, and it does not try to keep up with pi's releases.
+
+**Deliberately smaller.** pi is now twelve packages and about 390k lines of
+TypeScript, with eight built-in tools (bash, edit, find, grep, ls, powershell,
+read, write). pig is one Go module of about 8k lines with four tools. That is
+the point: small enough to read in an afternoon.
+
+**Different in kind:**
 
 - Extensions are separate programs speaking JSON lines, not TypeScript
   modules, so they can be written in any language.
@@ -135,6 +151,18 @@ pig follows pi's design closely but is not byte-for-byte compatible:
   either API go through `models.json`.
 - No package manager (`pi install`) yet. Copy files into `~/.pig/`.
 - The interactive screen uses Bubble Tea and is simpler than pi's TUI.
+- No permission system. Like pi, pig runs with your user's permissions.
+
+**Ported from pi, not invented here.** The tool descriptions and JSON schemas
+(`tools/*.go`), the system prompt's wording and section layout
+(`runtime/systemprompt.go`), and the skill-prompt format
+(`resources/skills.go`) are ported from pi's TypeScript source, and remain
+under pi's MIT licence. See [LICENSE](LICENSE).
+
+**What to take from pi now.** Not code. pi's
+[CHANGELOG](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/CHANGELOG.md)
+is the useful part: it records real bugs and real model churn. Read it for
+problems worth checking in pig, not for patches to apply.
 
 ## Development
 

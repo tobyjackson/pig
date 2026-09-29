@@ -1,5 +1,9 @@
 package resources
 
+// The skill-prompt format is ported from pi:
+// packages/coding-agent/src/core/skills.ts
+// Copyright (c) 2025 Mario Zechner, MIT licensed. See LICENSE.
+
 import (
 	"os"
 	"path/filepath"

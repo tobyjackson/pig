@@ -1,5 +1,9 @@
 package tools
 
+// The tool description, JSON schema and prompt snippet are ported from pi:
+// packages/coding-agent/src/core/tools/write.ts
+// Copyright (c) 2025 Mario Zechner, MIT licensed. See LICENSE.
+
 import (
 	"context"
 	"encoding/json"

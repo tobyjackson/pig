@@ -2,6 +2,21 @@ MIT License
 
 Copyright (c) 2026 Toby Jackson
 
+---
+
+This project is a Go port of pi, and contains material derived from it:
+
+    pi — https://github.com/earendil-works/pi
+    Copyright (c) 2025 Mario Zechner
+    Licensed under the MIT License.
+
+The tool descriptions, JSON schemas, system prompt wording and layout, and
+skill-prompt formatting in this repository are ported from pi's TypeScript
+source. That material remains under the copyright and licence above, and the
+notice is reproduced here as the MIT License requires.
+
+---
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

@@ -1,5 +1,9 @@
 package runtime
 
+// The system prompt's wording and section layout are ported from pi:
+// packages/coding-agent/src/core/system-prompt.ts
+// Copyright (c) 2025 Mario Zechner, MIT licensed. See LICENSE.
+
 import (
 	"strings"
 
