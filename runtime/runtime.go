@@ -84,6 +84,7 @@ type Session struct {
 	autoCompaction bool
 	compacting     bool
 	listeners      []func(Event)
+	pending        []Event
 	sessionsRoot   string
 }
 
@@ -260,13 +261,22 @@ func (s *Session) pickThinking() {
 
 func (s *Session) loadResources() {
 	cwd := s.Opts.Cwd
+	// Resource files that are malformed are reported rather than silently
+	// skipped, so a template or skill that never shows up can be explained.
+	warn := func(what, msg string) {
+		s.emit(Event{Type: "notify", Text: what + ": " + msg, Level: "warning"})
+	}
 	if !s.Opts.NoSkills {
-		s.Skills = resources.LoadSkills(cwd, s.Trusted, append(s.Settings.Skills, s.Opts.SkillPaths...))
+		s.Skills = resources.LoadSkills(cwd, s.Trusted, append(s.Settings.Skills, s.Opts.SkillPaths...), func(msg string) {
+			warn("skill", msg)
+		})
 	} else {
 		s.Skills = nil
 	}
 	if !s.Opts.NoPrompts {
-		s.Prompts = resources.LoadPromptTemplates(cwd, s.Trusted, append(s.Settings.Prompts, s.Opts.PromptPaths...))
+		s.Prompts = resources.LoadPromptTemplates(cwd, s.Trusted, append(s.Settings.Prompts, s.Opts.PromptPaths...), func(msg string) {
+			warn("prompt template", msg)
+		})
 	} else {
 		s.Prompts = nil
 	}
@@ -344,6 +354,15 @@ func (s *Session) rebuildSystemPrompt() {
 func (s *Session) installHooks() {
 	a := s.Agent
 	a.Subscribe(func(e Event) { s.emit(e) })
+	// A queued message is filtered when the agent consumes it, not when it is
+	// queued, so an extension can still see steers and follow-ups without
+	// blocking the caller that sent them.
+	a.Hooks.FilterQueued = func(m ai.Message) (ai.Message, bool) {
+		if ext := s.applyInputHooks(m, true); ext.Role != "" {
+			return ext, true
+		}
+		return m, false
+	}
 	a.Hooks.OnMessage = func(m ai.Message) { s.Store.AppendMessage(m) }
 	a.Hooks.BeforeTurn = func(ctx context.Context) error {
 		if !s.autoCompaction {
@@ -412,11 +431,18 @@ func (s *Session) reloadAgentMessages() {
 }
 
 // Subscribe adds an event listener and returns a function that removes it.
+// Warnings raised while the session was being built are delivered immediately,
+// since they would otherwise be lost before the listener existed.
 func (s *Session) Subscribe(fn func(Event)) func() {
 	s.mu.Lock()
+	pending := s.pending
+	s.pending = nil
 	s.listeners = append(s.listeners, fn)
 	idx := len(s.listeners) - 1
 	s.mu.Unlock()
+	for _, e := range pending {
+		fn(e)
+	}
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -429,6 +455,15 @@ func (s *Session) Subscribe(fn func(Event)) func() {
 func (s *Session) emit(e Event) {
 	s.mu.Lock()
 	ls := append([]func(Event){}, s.listeners...)
+	if len(ls) == 0 {
+		// No listener yet, which means the session is still being built. Hold
+		// the event so Subscribe can deliver it rather than dropping it.
+		if len(s.pending) < 64 {
+			s.pending = append(s.pending, e)
+		}
+		s.mu.Unlock()
+		return
+	}
 	s.mu.Unlock()
 	for _, l := range ls {
 		l(e)
@@ -444,7 +479,13 @@ func (s *Session) Prompt(ctx context.Context, text string) error {
 // PromptMessage is Prompt for a message that may carry images.
 func (s *Session) PromptMessage(ctx context.Context, m ai.Message) error {
 	if s.Agent.IsRunning() {
-		s.Agent.Steer(m)
+		s.SteerMessage(m)
+		return nil
+	}
+	if ext := s.applyInputHooks(m, false); ext.Role != "" {
+		m = ext
+	} else {
+		// An extension blocked the prompt.
 		return nil
 	}
 	if s.Exts != nil {
@@ -476,10 +517,55 @@ func isOverflow(err error) bool {
 }
 
 // Steer queues text for delivery after the current tool calls.
-func (s *Session) Steer(text string) { s.Agent.Steer(ai.UserMessage(text)) }
+func (s *Session) Steer(text string) { s.SteerMessage(ai.UserMessage(text)) }
 
 // FollowUp queues text for delivery once the agent is idle.
-func (s *Session) FollowUp(text string) { s.Agent.FollowUp(ai.UserMessage(text)) }
+func (s *Session) FollowUp(text string) { s.FollowUpMessage(ai.UserMessage(text)) }
+
+// SteerMessage and FollowUpMessage queue a message for the agent. The input
+// hooks run later, in the agent's goroutine, via Hooks.FilterQueued: a message
+// that arrives while the agent is busy used to skip the hooks entirely, and
+// running them here would block the caller, which for the TUI is the UI thread.
+func (s *Session) SteerMessage(m ai.Message)    { s.Agent.Steer(m) }
+func (s *Session) FollowUpMessage(m ai.Message) { s.Agent.FollowUp(m) }
+
+// applyInputHooks lets extensions see and rewrite a user message. A reply with
+// "block": true drops the message, which is reported as an empty Role so
+// callers can tell "blocked" from "handled".
+func (s *Session) applyInputHooks(m ai.Message, queued bool) ai.Message {
+	if s.Exts == nil {
+		return m
+	}
+	reply := s.Exts.Emit("input", map[string]any{"text": m.TextContent(), "queued": queued})
+	if b, ok := reply["block"]; ok {
+		var blocked bool
+		if json.Unmarshal(b, &blocked) == nil && blocked {
+			reason := "blocked by extension"
+			if r, ok := reply["reason"]; ok {
+				var rs string
+				if json.Unmarshal(r, &rs) == nil && rs != "" {
+					reason = rs
+				}
+			}
+			s.emit(Event{Type: "notify", Text: reason, Level: "warning"})
+			return ai.Message{}
+		}
+	}
+	if t, ok := reply["text"]; ok {
+		var v string
+		if json.Unmarshal(t, &v) == nil && v != m.TextContent() {
+			// Keep any non-text content, such as images, and replace the text.
+			out := ai.UserMessage(v)
+			for _, c := range m.Content {
+				if c.Type != "text" {
+					out.Content = append(out.Content, c)
+				}
+			}
+			return out
+		}
+	}
+	return m
+}
 
 // Abort stops the current run.
 func (s *Session) Abort() { s.Agent.Abort() }
@@ -583,6 +669,24 @@ func (s *Session) reserveTokens() int {
 	return r
 }
 
+// compactionBudget is the largest kept part compaction may leave behind. The
+// next request adds the system prompt, the tools and the reply, so the kept part
+// and the reserve have to fit under the window together. A floor keeps the
+// figure sane when a model reports a tiny or missing context window.
+func (s *Session) compactionBudget() int {
+	w := s.Agent.Model.ContextWindow
+	if w <= 0 {
+		return s.Settings.Compaction.KeepRecentTokens
+	}
+	b := w - s.reserveTokens() - len(s.Agent.SystemPrompt)/4
+	if b < s.Settings.Compaction.KeepRecentTokens {
+		// KeepRecentTokens is the user's stated preference; never override it
+		// downward, or compaction would keep less than asked for.
+		return s.Settings.Compaction.KeepRecentTokens
+	}
+	return b
+}
+
 func (s *Session) compact(ctx context.Context, custom, reason string) (string, error) {
 	s.mu.Lock()
 	if s.compacting {
@@ -595,7 +699,7 @@ func (s *Session) compact(ctx context.Context, custom, reason string) (string, e
 
 	bctx := s.Store.BuildContext()
 	msgs := bctx.Messages
-	cut := compaction.CutIndex(msgs, s.Settings.Compaction.KeepRecentTokens)
+	cut := compaction.CutIndex(msgs, s.Settings.Compaction.KeepRecentTokens, s.compactionBudget())
 	if cut <= 0 || cut >= len(msgs) {
 		return "", errNothingToCompact
 	}

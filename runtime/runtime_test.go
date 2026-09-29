@@ -3,12 +3,15 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tobyjackson/pig/ai"
+	"github.com/tobyjackson/pig/compaction"
 )
 
 // scriptedStream answers each request with the next reply in the list.
@@ -153,5 +156,109 @@ func TestPromptTemplateAndSkillExpansion(t *testing.T) {
 	}
 	if _, handled, _ := s.ExpandInput("plain text"); handled {
 		t.Fatal("plain text should not be handled")
+	}
+}
+
+// Warnings raised while the session is being built must survive until a
+// listener attaches, or a malformed skill or template says nothing at all.
+func TestResourceWarningsReachSubscriber(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIG_DIR", dir)
+	t.Setenv("ANTHROPIC_API_KEY", "test")
+	os.MkdirAll(filepath.Join(dir, "prompts"), 0o755)
+	os.WriteFile(filepath.Join(dir, "prompts", "broken.md"),
+		[]byte("---\ndescription is missing its colon\n---\nBody"), 0o644)
+
+	s, err := New(Options{Cwd: t.TempDir(), Model: "claude-opus-5", Stream: scriptedStream(nil), Mode: "print"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	s.Subscribe(func(e Event) {
+		if e.Type == "notify" {
+			got = append(got, e.Text)
+		}
+	})
+	if len(got) == 0 {
+		t.Fatal("warning raised during New was dropped")
+	}
+	if !strings.Contains(strings.Join(got, " "), "key: value") {
+		t.Fatalf("unhelpful warning: %v", got)
+	}
+}
+
+// A steer or follow-up must pass the input hooks too. It used to reach the agent
+// queue directly, so an extension that rewrites prompts never saw it.
+func TestQueuedMessagePassesInputHooks(t *testing.T) {
+	ext, err := filepath.Abs("../examples/extensions/hello.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+	dir := t.TempDir()
+	t.Setenv("PIG_DIR", dir)
+	t.Setenv("ANTHROPIC_API_KEY", "test")
+	s, err := New(Options{Cwd: t.TempDir(), Model: "claude-opus-5", Stream: scriptedStream(nil), Mode: "print", ExtensionPaths: []string{ext}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// The hook rewrites "? why is the sky blue" to "why is the sky blue".
+	rewritten, ok := s.Agent.Hooks.FilterQueued(ai.UserMessage("? why is the sky blue"))
+	if !ok || rewritten.TextContent() != "why is the sky blue" {
+		t.Fatalf("queued message not rewritten: ok=%v text=%q", ok, rewritten.TextContent())
+	}
+	// And drops "!drop".
+	if _, ok := s.Agent.Hooks.FilterQueued(ai.UserMessage("!drop")); ok {
+		t.Fatal("queued message should have been dropped")
+	}
+	// Plain text passes through unchanged.
+	plain, ok := s.Agent.Hooks.FilterQueued(ai.UserMessage("keep me"))
+	if !ok || plain.TextContent() != "keep me" {
+		t.Fatalf("plain message altered: ok=%v text=%q", ok, plain.TextContent())
+	}
+}
+
+// Compaction must actually shrink an oversized tool run. Before this, a turn
+// whose tool calls and results were larger than the budget made CutIndex return
+// 0, compact() returned errNothingToCompact, and the next request failed because
+// the context was still over the window.
+func TestCompactShrinksOversizedToolRun(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIG_DIR", dir)
+	t.Setenv("ANTHROPIC_API_KEY", "test")
+	// The first scripted reply is consumed by the summarisation call.
+	s, err := New(Options{Cwd: t.TempDir(), Model: "claude-haiku-4-5",
+		Stream: scriptedStream([]string{"## Goal\nsummary of the tool run"}), Mode: "print"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	big := strings.Repeat("x", 50_000)
+	// compact() builds context from the session store, so the history has to go
+	// there, not just into the agent.
+	s.Store.AppendMessage(ai.UserMessage("start"))
+	for i := 0; i < 30; i++ {
+		s.Store.AppendMessage(ai.Message{Role: "assistant", Content: []ai.Content{
+			{Type: "toolCall", Name: "bash", ID: fmt.Sprintf("c%d", i), Arguments: []byte(`{}`)}}})
+		s.Store.AppendMessage(ai.Message{Role: "toolResult", ToolName: "bash",
+			Content: []ai.Content{ai.Text(big)}})
+	}
+	s.reloadAgentMessages()
+
+	before := compaction.ContextTokens(s.Agent.SystemPrompt, s.Agent.Messages())
+	if !compaction.ShouldCompact(before, s.Model().ContextWindow, s.reserveTokens()) {
+		t.Fatalf("setup: %d tokens is not over the limit", before)
+	}
+	if _, err := s.Compact(context.Background(), ""); err != nil {
+		t.Fatalf("compaction refused: %v", err)
+	}
+	after := compaction.ContextTokens(s.Agent.SystemPrompt, s.Agent.Messages())
+	if compaction.ShouldCompact(after, s.Model().ContextWindow, s.reserveTokens()) {
+		t.Fatalf("still over the limit after compaction: %d -> %d tokens", before, after)
 	}
 }

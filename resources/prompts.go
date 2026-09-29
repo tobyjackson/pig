@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +21,9 @@ type PromptTemplate struct {
 }
 
 // LoadPromptTemplates gathers templates from ~/.pig/prompts and .pig/prompts.
-func LoadPromptTemplates(cwd string, trusted bool, extra []string) []PromptTemplate {
+// A template whose frontmatter is malformed is reported through warn and still
+// loaded, since the body is usually still usable.
+func LoadPromptTemplates(cwd string, trusted bool, extra []string, warn func(string)) []PromptTemplate {
 	var out []PromptTemplate
 	seen := map[string]bool{}
 	add := func(t PromptTemplate, ok bool) {
@@ -29,55 +32,63 @@ func LoadPromptTemplates(cwd string, trusted bool, extra []string) []PromptTempl
 			out = append(out, t)
 		}
 	}
-	for _, t := range templatesInDir(filepath.Join(GlobalDir(), "prompts"), "user") {
+	for _, t := range templatesInDir(filepath.Join(GlobalDir(), "prompts"), "user", warn) {
 		add(t, true)
 	}
 	if trusted {
-		for _, t := range templatesInDir(filepath.Join(ProjectDir(cwd), "prompts"), "project") {
+		for _, t := range templatesInDir(filepath.Join(ProjectDir(cwd), "prompts"), "project", warn) {
 			add(t, true)
 		}
 	}
 	for _, p := range extra {
 		p = expandHome(p)
 		if isDir(p) {
-			for _, t := range templatesInDir(p, "path") {
+			for _, t := range templatesInDir(p, "path", warn) {
 				add(t, true)
 			}
 		} else {
-			add(loadTemplate(p, "path"))
+			add(loadTemplate(p, "path", warn))
 		}
 	}
 	return out
 }
 
-func templatesInDir(dir, source string) []PromptTemplate {
+func templatesInDir(dir, source string, warn func(string)) []PromptTemplate {
 	files, _ := filepath.Glob(filepath.Join(dir, "*.md"))
 	sort.Strings(files)
 	var out []PromptTemplate
 	for _, f := range files {
-		if t, ok := loadTemplate(f, source); ok {
+		if t, ok := loadTemplate(f, source, warn); ok {
 			out = append(out, t)
 		}
 	}
 	return out
 }
 
-func loadTemplate(path, source string) (PromptTemplate, bool) {
+func loadTemplate(path, source string, warn func(string)) (PromptTemplate, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return PromptTemplate{}, false
 	}
-	meta, body := ParseFrontmatter(string(data))
+	text := string(data)
+	meta, body, ferr := ParseFrontmatterChecked(text)
+	if ferr != nil && warn != nil {
+		warn(fmt.Sprintf("%s: %v", path, ferr))
+	}
 	t := PromptTemplate{
 		Name: strings.TrimSuffix(filepath.Base(path), ".md"), Body: body, Path: path, Source: source,
 		Description: meta["description"], ArgumentHint: meta["argument-hint"],
 	}
 	if t.Description == "" {
 		for _, line := range strings.Split(body, "\n") {
-			if s := strings.TrimSpace(line); s != "" {
-				t.Description = s
-				break
+			s := strings.TrimSpace(line)
+			// Skip blank lines and a bare frontmatter marker, which is what a
+			// body looks like when the block above it was never closed.
+			if s == "" || s == "---" {
+				continue
 			}
+			t.Description = s
+			break
 		}
 	}
 	return t, true

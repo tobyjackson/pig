@@ -108,6 +108,12 @@ func (b *Bash) Run(ctx context.Context, command string, timeout time.Duration, o
 		return -1, ctx.Err()
 	}
 	if ee, ok := waitErr.(*exec.ExitError); ok {
+		// A process killed by a signal has exit code -1, which says nothing.
+		// Report the signal instead, so "exited with code -1" never reaches
+		// the user or the model.
+		if sig := signalName(ee); sig != "" {
+			return -1, fmt.Errorf("Command was killed by %s", sig)
+		}
 		return ee.ExitCode(), nil
 	}
 	if waitErr != nil {

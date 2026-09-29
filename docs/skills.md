@@ -35,9 +35,14 @@ Rules:
 
 - `name` is 1–64 characters: lowercase letters, digits, and hyphens.
 - `description` is required, up to 1024 characters. Say *when* to use the
-  skill; that is what the model matches on.
+  skill; that is what the model matches on. A skill without one is skipped, and
+  pig says so rather than dropping it silently.
 - Optional: `disable-model-invocation: true` hides the skill from the model.
   You can still run it yourself with `/skill:name`.
+
+Each frontmatter line has to be `key: value`. A line without a colon, or a
+block that opens with `---` and is never closed, is reported as a warning and
+the file is skipped.
 
 Relative paths in a skill are resolved against the skill's folder, so you
 can ship helper scripts next to `SKILL.md`.

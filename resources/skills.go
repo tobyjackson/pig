@@ -5,6 +5,7 @@ package resources
 // Copyright (c) 2025 Mario Zechner, MIT licensed. See LICENSE.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,7 +29,7 @@ var skillName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // LoadSkills gathers skills from the standard folders plus any extra paths.
 // Project folders are only read when trusted.
-func LoadSkills(cwd string, trusted bool, extra []string) []Skill {
+func LoadSkills(cwd string, trusted bool, extra []string, warn func(string)) []Skill {
 	home, _ := os.UserHomeDir()
 	var dirs []struct{ path, source string }
 	dirs = append(dirs,
@@ -50,28 +51,28 @@ func LoadSkills(cwd string, trusted bool, extra []string) []Skill {
 		}
 	}
 	for _, d := range dirs {
-		for _, s := range skillsInDir(d.path, d.source) {
+		for _, s := range skillsInDir(d.path, d.source, warn) {
 			add(s, true)
 		}
 	}
 	for _, p := range extra {
 		p = expandHome(p)
 		if isDir(p) {
-			if s, ok := loadSkillFile(filepath.Join(p, "SKILL.md"), "path"); ok {
+			if s, ok := loadSkillFile(filepath.Join(p, "SKILL.md"), "path", warn); ok {
 				add(s, true)
 			} else {
-				for _, s := range skillsInDir(p, "path") {
+				for _, s := range skillsInDir(p, "path", warn) {
 					add(s, true)
 				}
 			}
 		} else if isFile(p) {
-			add(loadSkillFile(p, "path"))
+			add(loadSkillFile(p, "path", warn))
 		}
 	}
 	return out
 }
 
-func skillsInDir(dir, source string) []Skill {
+func skillsInDir(dir, source string, warn func(string)) []Skill {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -80,11 +81,11 @@ func skillsInDir(dir, source string) []Skill {
 	for _, e := range entries {
 		p := filepath.Join(dir, e.Name())
 		if e.IsDir() {
-			if s, ok := loadSkillFile(filepath.Join(p, "SKILL.md"), source); ok {
+			if s, ok := loadSkillFile(filepath.Join(p, "SKILL.md"), source, warn); ok {
 				out = append(out, s)
 			}
 		} else if strings.HasSuffix(e.Name(), ".md") {
-			if s, ok := loadSkillFile(p, source); ok {
+			if s, ok := loadSkillFile(p, source, warn); ok {
 				out = append(out, s)
 			}
 		}
@@ -93,14 +94,21 @@ func skillsInDir(dir, source string) []Skill {
 	return out
 }
 
-func loadSkillFile(path, source string) (Skill, bool) {
+func loadSkillFile(path, source string, warn func(string)) (Skill, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Skill{}, false
 	}
-	meta, _ := ParseFrontmatter(string(data))
+	text := string(data)
+	meta, _, ferr := ParseFrontmatterChecked(text)
+	if ferr != nil && warn != nil {
+		warn(fmt.Sprintf("%s: %v", path, ferr))
+	}
 	desc := meta["description"]
 	if desc == "" {
+		if warn != nil {
+			warn(fmt.Sprintf("%s: no description in frontmatter, so the skill is not loaded", path))
+		}
 		return Skill{}, false
 	}
 	name := meta["name"]

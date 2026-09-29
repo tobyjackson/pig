@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -96,6 +97,26 @@ func TestBashExitCodeAndTimeout(t *testing.T) {
 	res = b.Execute(context.Background(), "1", json.RawMessage(`{"command":"sleep 5","timeout":0.2}`), nil)
 	if !res.IsError || !strings.Contains(res.Content[0].Text, "timed out") {
 		t.Fatalf("got %+v", res)
+	}
+}
+
+// A process killed by a signal reports exit code -1, which says nothing. The
+// message must name the signal instead.
+func TestBashSignalReported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signals are Unix-only")
+	}
+	b := NewBash(t.TempDir(), "")
+	res := b.Execute(context.Background(), "1", json.RawMessage(`{"command":"kill -TERM $$"}`), nil)
+	if !res.IsError {
+		t.Fatalf("a killed command should be an error: %+v", res)
+	}
+	got := res.Content[0].Text
+	if !strings.Contains(got, "SIGTERM") {
+		t.Fatalf("signal not named: %q", got)
+	}
+	if strings.Contains(got, "code -1") {
+		t.Fatalf("unhelpful exit code leaked through: %q", got)
 	}
 }
 

@@ -35,7 +35,7 @@ The extension answers once:
 {"type":"ready","name":"hello",
  "tools":[{"name":"shout","description":"Upper-case text","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}],
  "commands":[{"name":"hello","description":"Say hello"}],
- "events":["tool_call","tool_result","before_agent_start","agent_end","session_start"]}
+ "events":["tool_call","tool_result","before_agent_start","agent_end","session_start","input"]}
 ```
 
 Leave out anything you do not need. `parameters` is a JSON schema.
@@ -93,10 +93,17 @@ Reply with `"data":{}` when you have nothing to change.
 | event | data you receive | what you may return in data |
 | --- | --- | --- |
 | `session_start` | `reason`, `sessionFile`, `cwd` | nothing |
+| `input` | `text`, `queued` | `text` – a replacement, or `block: true` with `reason` |
 | `before_agent_start` | `prompt`, `systemPrompt` | `systemPrompt` – a replacement system prompt for this run |
 | `tool_call` | `toolName`, `toolCallId`, `input` | `block: true` with `reason`, or `input` – changed arguments |
 | `tool_result` | `toolName`, `toolCallId`, `input`, `content`, `isError` | `content`, `isError` – a changed result |
 | `agent_end` | nothing | nothing |
+
+`input` runs for every message on its way in, including one queued while pig is
+working. `queued` is true for those. Rewriting `text` replaces the message the
+model sees; returning `block: true` drops it and shows `reason` to the user.
+Note that `before_agent_start` only fires for a prompt that starts a run, so use
+`input` when you need to see every message.
 
 Several extensions may handle the same event; each sees the previous one's
 changes.

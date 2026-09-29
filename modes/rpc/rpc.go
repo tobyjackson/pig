@@ -93,10 +93,11 @@ func handle(ctx context.Context, s *runtime.Session, c command, respond func(com
 			msg.Content = append(msg.Content, ai.Content{Type: "image", Data: im.Data, MimeType: im.MimeType})
 		}
 		if s.IsRunning() {
+			// Queued through the session so extension input hooks still run.
 			if c.StreamingBehavior == "followUp" {
-				s.Agent.FollowUp(msg)
+				s.FollowUpMessage(msg)
 			} else {
-				s.Agent.Steer(msg)
+				s.SteerMessage(msg)
 			}
 			ok(nil)
 			return
@@ -117,10 +118,10 @@ func handle(ctx context.Context, s *runtime.Session, c command, respond func(com
 		inflight.Add(1)
 		go func() { defer inflight.Done(); _ = s.PromptMessage(ctx, msg) }()
 	case "steer":
-		s.Steer(c.Message)
+		s.SteerMessage(ai.UserMessage(c.Message))
 		ok(nil)
 	case "follow_up":
-		s.FollowUp(c.Message)
+		s.FollowUpMessage(ai.UserMessage(c.Message))
 		ok(nil)
 	case "abort":
 		s.Abort()

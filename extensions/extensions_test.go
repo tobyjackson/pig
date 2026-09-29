@@ -50,3 +50,28 @@ func TestHelloExtension(t *testing.T) {
 		t.Fatalf("notify not received: %+v", notices)
 	}
 }
+
+// A message queued while the agent is busy must still pass the input hooks.
+// Before this, every steer and follow-up went straight to the agent queue and
+// an extension could never see or rewrite it.
+func TestInputEventRewritesAndBlocks(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+	path, _ := filepath.Abs("../examples/extensions/hello.py")
+	m := Load(context.Background(), []string{path}, t.TempDir(), nil)
+	defer m.Close()
+
+	reply := m.Emit("input", map[string]any{"text": "? why is the sky blue", "queued": true})
+	if string(reply["text"]) != `"why is the sky blue"` {
+		t.Fatalf("text not rewritten: %v", reply)
+	}
+	reply = m.Emit("input", map[string]any{"text": "!drop", "queued": true})
+	if string(reply["block"]) != "true" {
+		t.Fatalf("expected block, got %v", reply)
+	}
+	reply = m.Emit("input", map[string]any{"text": "keep me", "queued": false})
+	if _, blocked := reply["block"]; blocked {
+		t.Fatalf("plain text should pass: %v", reply)
+	}
+}

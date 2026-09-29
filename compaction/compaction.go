@@ -59,40 +59,89 @@ func ShouldCompact(contextTokens, contextWindow, reserveTokens int) bool {
 	return contextTokens > contextWindow-reserveTokens
 }
 
-// CutIndex picks where kept messages begin: walk back from the end
-// collecting about keepRecent tokens, then move to the start of that turn
-// (a user message). Returns len(msgs) when nothing older exists to cut.
-func CutIndex(msgs []ai.Message, keepRecent int) int {
-	if len(msgs) == 0 {
+// CutIndex picks where the kept messages begin.
+//
+// keepRecent is how much tail to keep when there is room. budget is the largest
+// kept part allowed: if the kept part is bigger than budget, compaction has not
+// shrunk the context enough and the next request may still fail.
+//
+// The cut always starts on a user message or an assistant message, never on a
+// tool result, so a tool result stays with the call it answers. A user message is
+// preferred, which keeps the current turn whole. An assistant message is the
+// fallback, which is what a long run of tool calls and results needs: when one
+// turn's tool run is larger than the budget there is no turn-boundary cut that
+// fits, and cutting mid-turn is cheaper than refusing to compact.
+//
+// The returned cut is always one whose kept part fits budget, so compaction
+// cannot loop: after it runs, ShouldCompact is false and it will not fire again
+// on the same history. Returns 0 when there is nothing older to cut.
+func CutIndex(msgs []ai.Message, keepRecent, budget int) int {
+	n := len(msgs)
+	if n == 0 {
 		return 0
 	}
+	if budget <= 0 {
+		// No usable window to respect; fall back to keepRecent alone.
+		budget = 1 << 30
+	}
+
+	// Preferred: the last user message, which keeps the current turn whole. Only
+	// when it fits, so the guarantee below still holds.
+	if j := lastUser(msgs); j > 0 && keptFits(msgs, j, budget) {
+		return j
+	}
+
+	// Walk back from the end until the budget point, then cut at the first
+	// message at or after it that can start the kept part. Since the kept part
+	// shrinks as j grows, the first fitting j is the largest kept part allowed.
+	point := 1
 	total := 0
-	i := len(msgs) - 1
-	for ; i >= 0; i-- {
+	for i := n - 1; i > 0; i-- {
 		total += EstimateTokens(msgs[i])
 		if total >= keepRecent {
+			point = i
 			break
 		}
 	}
-	if i < 0 {
-		i = 0
-	}
-	// Move to the nearest user message at or before i, so no tool result is
-	// separated from its call.
-	for i > 0 && msgs[i].Role != "user" {
-		i--
-	}
-	if i == 0 {
-		// Everything fits in keepRecent, or the first turn is huge. Cut at
-		// the most recent user message instead so we still shrink.
-		for j := len(msgs) - 1; j > 0; j-- {
-			if msgs[j].Role == "user" {
-				return j
-			}
+	for j := point; j < n; j++ {
+		if msgs[j].Role == "toolResult" {
+			continue
 		}
-		return 0
+		if keptFits(msgs, j, budget) {
+			return j
+		}
 	}
-	return i
+
+	// Only tool results from the budget point on, and none of them fit. Walk back
+	// to the call they answer rather than splitting one from the other.
+	for j := point; j > 0; j-- {
+		if msgs[j].Role != "toolResult" {
+			return j
+		}
+	}
+	return 0
+}
+
+// lastUser returns the index of the last user message, or -1.
+func lastUser(msgs []ai.Message) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return i
+		}
+	}
+	return -1
+}
+
+// keptFits reports whether keeping msgs[cut:] stays within budget.
+func keptFits(msgs []ai.Message, cut, budget int) bool {
+	total := 0
+	for _, m := range msgs[cut:] {
+		total += EstimateTokens(m)
+		if total > budget {
+			return false
+		}
+	}
+	return true
 }
 
 // Serialize renders messages as plain text for the summariser.

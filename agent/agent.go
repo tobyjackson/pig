@@ -53,6 +53,10 @@ type Hooks struct {
 	ToolCall func(name, callID string, args json.RawMessage) (json.RawMessage, string)
 	// ToolResult may replace a tool's result before it is recorded.
 	ToolResult func(name, callID string, args json.RawMessage, r tools.Result) tools.Result
+	// FilterQueued may rewrite or drop a queued steering or follow-up message as
+	// it is consumed, returning false to drop it. It runs on the agent's own
+	// goroutine, so a slow filter never blocks the caller that queued it.
+	FilterQueued func(m ai.Message) (ai.Message, bool)
 	// OnMessage is called for every message added to the history.
 	OnMessage func(m ai.Message)
 }
@@ -332,7 +336,7 @@ func (a *Agent) loop(ctx context.Context) error {
 
 		if len(msg.ToolCalls()) > 0 {
 			// Steering messages ride along with the tool results.
-			if s := a.popSteering(); len(s) > 0 {
+			if s := a.consume(a.popSteering()); len(s) > 0 {
 				for _, m := range s {
 					a.addMessage(m)
 				}
@@ -343,14 +347,14 @@ func (a *Agent) loop(ctx context.Context) error {
 			}
 			continue
 		}
-		if s := a.popSteering(); len(s) > 0 {
+		if s := a.consume(a.popSteering()); len(s) > 0 {
 			for _, m := range s {
 				a.addMessage(m)
 			}
 			a.emitQueue()
 			continue
 		}
-		if f := a.popFollowUp(); len(f) > 0 {
+		if f := a.consume(a.popFollowUp()); len(f) > 0 {
 			for _, m := range f {
 				a.addMessage(m)
 			}
@@ -359,6 +363,21 @@ func (a *Agent) loop(ctx context.Context) error {
 		}
 		return nil
 	}
+}
+
+// consume runs queued messages through the FilterQueued hook, dropping any the
+// hook rejects. It runs on the agent's goroutine so the caller is never blocked.
+func (a *Agent) consume(msgs []ai.Message) []ai.Message {
+	if a.Hooks.FilterQueued == nil || len(msgs) == 0 {
+		return msgs
+	}
+	out := make([]ai.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if fm, ok := a.Hooks.FilterQueued(m); ok && fm.Role != "" {
+			out = append(out, fm)
+		}
+	}
+	return out
 }
 
 func (a *Agent) streamAssistant(ctx context.Context) ai.Message {

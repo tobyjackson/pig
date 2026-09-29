@@ -28,7 +28,7 @@ for line in sys.stdin:
                 "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
             }],
             "commands": [{"name": "hello", "description": "Say hello from the extension"}],
-            "events": ["tool_call", "session_start"],
+            "events": ["tool_call", "session_start", "input"],
         })
 
     elif kind == "tool_call":
@@ -47,6 +47,14 @@ for line in sys.stdin:
                 reply = {"block": True, "reason": "rm -rf is not allowed by the hello extension"}
         if msg["event"] == "session_start":
             send({"type": "notify", "message": "hello extension loaded", "level": "info"})
+        if msg["event"] == "input":
+            # Rewrite a queued "? ..." into a plain question, and drop "!drop".
+            # A steer or follow-up passes through here too, not just a prompt.
+            text = data.get("text", "")
+            if text == "!drop":
+                reply = {"block": True, "reason": "dropped by the hello extension"}
+            elif text.startswith("? "):
+                reply = {"text": text[2:]}
         send({"type": "response", "id": msg["id"], "data": reply})
 
     elif kind == "shutdown":

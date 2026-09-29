@@ -3,6 +3,7 @@ package resources
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -43,16 +44,53 @@ func TestLoadSkillsAndPrompts(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "skills", "pdf", "SKILL.md"), []byte("---\nname: pdf\ndescription: Work with PDFs\n---\nSteps"), 0o644)
 	os.MkdirAll(filepath.Join(dir, "prompts"), 0o755)
 	os.WriteFile(filepath.Join(dir, "prompts", "review.md"), []byte("---\ndescription: Review code\n---\nReview $1"), 0o644)
-	skills := LoadSkills(t.TempDir(), false, nil)
+	skills := LoadSkills(t.TempDir(), false, nil, nil)
 	if len(skills) != 1 || skills[0].Name != "pdf" {
 		t.Fatalf("skills: %+v", skills)
 	}
 	if !contains(FormatSkillsForPrompt(skills, "read"), "<name>pdf</name>") {
 		t.Fatal("prompt format missing skill")
 	}
-	prompts := LoadPromptTemplates(t.TempDir(), false, nil)
+	prompts := LoadPromptTemplates(t.TempDir(), false, nil, nil)
 	if len(prompts) != 1 || prompts[0].Name != "review" || prompts[0].Expand([]string{"x"}) != "Review x" {
 		t.Fatalf("prompts: %+v", prompts)
+	}
+}
+
+// A malformed frontmatter block used to be skipped silently, which made a
+// template or skill vanish from the UI with no explanation.
+func TestMalformedFrontmatterIsReported(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIG_DIR", dir)
+	os.MkdirAll(filepath.Join(dir, "prompts"), 0o755)
+	os.WriteFile(filepath.Join(dir, "prompts", "broken.md"),
+		[]byte("---\ndescription is missing its colon\n---\nBody"), 0o644)
+	var warned []string
+	prompts := LoadPromptTemplates(t.TempDir(), false, nil, func(msg string) { warned = append(warned, msg) })
+	if len(warned) == 0 {
+		t.Fatal("malformed frontmatter was not reported")
+	}
+	if !strings.Contains(strings.Join(warned, " "), "key: value") {
+		t.Fatalf("warning is unhelpful: %v", warned)
+	}
+	// The body is still usable, so the template stays loaded.
+	if len(prompts) != 1 || prompts[0].Name != "broken" {
+		t.Fatalf("prompts: %+v", prompts)
+	}
+
+	// An unterminated block is reported too, and must not leak "---" into the
+	// description.
+	os.WriteFile(filepath.Join(dir, "prompts", "unterminated.md"),
+		[]byte("---\ndescription: never closed\nBody"), 0o644)
+	warned = nil
+	prompts = LoadPromptTemplates(t.TempDir(), false, nil, func(msg string) { warned = append(warned, msg) })
+	if len(warned) == 0 || !strings.Contains(strings.Join(warned, " "), "never closed") {
+		t.Fatalf("unterminated frontmatter not reported: %v", warned)
+	}
+	for _, p := range prompts {
+		if p.Name == "unterminated" && p.Description == "---" {
+			t.Fatal("description leaked the frontmatter marker")
+		}
 	}
 }
 

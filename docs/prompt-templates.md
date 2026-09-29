@@ -23,7 +23,9 @@ List problems first, most serious at the top, then suggest fixes.
 ```
 
 Both frontmatter fields are optional. Without `description`, the first
-non-empty line is used.
+non-empty line is used. A frontmatter line that is not `key: value`, or a block
+that opens with `---` and is never closed, is reported as a warning; the
+template still loads from its body.
 
 ## Arguments
 
