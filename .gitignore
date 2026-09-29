@@ -1,0 +1,27 @@
+# Built binaries. Released as GitHub release assets, never committed.
+/pig
+/sdk
+/dist/
+
+# Go
+*.test
+*.out
+coverage.txt
+profile.out
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local configuration, keys and sessions. pig keeps these in ~/.pig, but a
+# project-local .pig/ or a stray .env should never be committed.
+.env
+.env.*
+.pig/
+
+# Local scratch
+/tmp/
