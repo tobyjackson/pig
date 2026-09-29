@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -62,7 +61,7 @@ func (b *Bash) Run(ctx context.Context, command string, timeout time.Duration, o
 	for k, v := range b.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	newProcessGroup(cmd)
 	cmd.Stdin = nil
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -96,7 +95,7 @@ func (b *Bash) Run(ctx context.Context, command string, timeout time.Duration, o
 	select {
 	case waitErr = <-done:
 	case <-ctx.Done():
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		killProcessGroup(cmd)
 		waitErr = <-done
 	}
 	pr.Close()

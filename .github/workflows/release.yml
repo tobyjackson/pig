@@ -1,0 +1,105 @@
+name: release
+
+# Tag a commit and push the tag:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# This builds the binaries, writes SHA256SUMS, and opens a draft release. It
+# does not publish: read the notes, then press Publish on GitHub. Drafts are
+# deliberate, because the notes are worth a look before anyone downloads.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          ext=""
+          [ "$GOOS" = windows ] && ext=".exe"
+          out="pig-${GOOS}-${GOARCH}${ext}"
+          # -s -w drop the symbol table and DWARF: smaller, and the panic
+          # traces users need are still there. The version comes from the tag.
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o "dist/${out}" ./cmd/pig
+
+          # Only a binary for this runner's own platform can be executed, and
+          # even then not always (an arm64 macOS runner can't run amd64). Check
+          # the file was made, and that the version string is in it, without
+          # running it. The `release` job below runs the linux/amd64 build once.
+          test -s "dist/${out}"
+          strings "dist/${out}" | grep -qF "${GITHUB_REF_NAME}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pig-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          set -eu
+          ls -l
+          # One line per file, in the format `sha256sum -c` expects.
+          sha256sum pig-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Smoke-test the Linux build
+        run: |
+          set -eu
+          chmod +x dist/pig-linux-amd64
+          got="$(dist/pig-linux-amd64 --version)"
+          echo "$got"
+          # The tag must be what the binary reports, or -X didn't take.
+          case "$got" in *"${GITHUB_REF_NAME}"*) ;; *)
+            echo "version mismatch: want ${GITHUB_REF_NAME}, got $got" >&2; exit 1 ;; esac
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            dist/pig-*
+            dist/SHA256SUMS

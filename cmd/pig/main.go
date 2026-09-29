@@ -25,7 +25,12 @@ import (
 	"github.com/tobyjackson/pig/session"
 )
 
-const version = "0.1.0"
+// version is set at build time from a git tag:
+//
+//	go build -ldflags "-X main.version=v1.2.3"
+//
+// A plain `go build` uses the value below.
+var version = "0.1.0"
 
 // multi collects a repeatable flag.
 type multi []string

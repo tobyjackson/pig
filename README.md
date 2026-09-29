@@ -19,6 +19,37 @@ Or from a clone of this repo:
 go build -o pig ./cmd/pig
 ```
 
+### Prebuilt binaries
+
+Each release has binaries for Linux, macOS and Windows, on amd64 and arm64,
+with a `SHA256SUMS` file. There is no installer: download the file for your
+platform, make it executable, and put it on your `PATH`.
+
+```sh
+# macOS on Apple silicon, as an example. Change the name for your platform.
+curl -LO https://github.com/tobyjackson/pig/releases/latest/download/pig-darwin-arm64
+chmod +x pig-darwin-arm64
+mv pig-darwin-arm64 ~/.local/bin/pig
+```
+
+Verify the download against `SHA256SUMS` before you run it. The file names are
+`pig-<os>-<arch>`, with `.exe` on Windows:
+
+| | amd64 | arm64 |
+| --- | --- | --- |
+| Linux | `pig-linux-amd64` | `pig-linux-arm64` |
+| macOS | `pig-darwin-amd64` | `pig-darwin-arm64` |
+| Windows | `pig-windows-amd64.exe` | — |
+
+On macOS, a downloaded binary is quarantined by Gatekeeper. Either allow it in
+System Settings, or clear the flag:
+
+```sh
+xattr -d com.apple.quarantine ~/.local/bin/pig
+```
+
+On Windows, use `pig.exe` and put its folder on your `PATH`.
+
 ## First run
 
 Give pig an API key. Either export one:
@@ -110,6 +141,27 @@ pig follows pi's design closely but is not byte-for-byte compatible:
 ```sh
 go test ./...
 go run ./internal/fakeserver          # a fake model for trying pig offline
+```
+
+### Releasing
+
+Releases are built by `.github/workflows/release.yml`. Tag a commit and push
+the tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow tests, cross-compiles five binaries, writes `SHA256SUMS`, and
+opens a **draft** release. Read the notes, then publish it on GitHub. The
+version a binary reports comes from the tag, injected with `-X main.version`.
+
+To cut a release by hand, for one platform:
+
+```sh
+go build -trimpath -ldflags "-s -w -X main.version=v0.1.0" -o pig ./cmd/pig
+./pig --version
 ```
 
 MIT licensed.
