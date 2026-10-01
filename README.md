@@ -115,6 +115,8 @@ Use pig as a Go library too: see `pig docs sdk` and `examples/sdk`.
   prompts/              markdown templates you run with /name
   extensions/           programs that add tools, commands, and hooks
   AGENTS.md             instructions added to every session
+  SYSTEM.md             replaces the default system prompt
+  APPEND_SYSTEM.md      added after the default system prompt
 .pig/                   the same folders, per project (asked to trust first)
 AGENTS.md, CLAUDE.md    project instructions, picked up automatically
 ```
@@ -129,6 +131,7 @@ Run `pig docs <topic>` or open the `docs/` folder:
 - `extensions` – add tools and hooks in any language
 - `sessions` – the session file format, branching, forking
 - `settings` – every settings.json key
+- `system-prompt` – replace or extend the prompt with SYSTEM.md
 - `models` – add providers with models.json
 - `rpc` and `json` – protocols for driving pig from code
 - `sdk` – use pig from Go

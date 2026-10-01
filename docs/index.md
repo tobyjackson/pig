@@ -12,6 +12,7 @@ Topics (`pig docs <topic>`):
 - extensions – add tools, commands, and hooks in any language
 - sessions – session files, branching, forking, compaction
 - settings – every settings.json key
+- system-prompt – replace or extend the prompt with SYSTEM.md
 - models – add providers and models with models.json
 - json – the `--mode json` event stream
 - rpc – drive pig from another program
