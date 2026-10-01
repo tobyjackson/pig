@@ -11,18 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 )
-
-// fileLocks serialises edits to the same file when tools run in parallel.
-var fileLocks sync.Map
-
-func lockFile(path string) func() {
-	v, _ := fileLocks.LoadOrStore(path, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
-}
 
 // Edit replaces exact text in one file. Several replacements may be sent in
 // one call; each is matched against the original file.
@@ -141,8 +130,6 @@ func (e *Edit) Execute(ctx context.Context, _ string, args json.RawMessage, _ fu
 		return ErrorResult(err.Error())
 	}
 	abs := Resolve(path, e.cwd)
-	unlock := lockFile(abs)
-	defer unlock()
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("Could not edit file: %s. %v", path, err))
@@ -162,7 +149,7 @@ func (e *Edit) Execute(ctx context.Context, _ string, args json.RawMessage, _ fu
 	if crlf {
 		final = strings.ReplaceAll(edited, "\n", "\r\n")
 	}
-	if err := os.WriteFile(abs, []byte(bom+final), 0o644); err != nil {
+	if err := writeFileAtomic(abs, []byte(bom+final), 0o644); err != nil {
 		return ErrorResult(fmt.Sprintf("Could not write file: %v", err))
 	}
 	res := TextResult(fmt.Sprintf("Successfully replaced %d block(s) in %s.", len(edits), path))

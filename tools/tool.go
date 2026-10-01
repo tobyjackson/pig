@@ -47,6 +47,35 @@ func Definition(t Tool) ai.Tool {
 	return ai.Tool{Name: t.Name(), Description: t.Description(), Parameters: t.Parameters()}
 }
 
+// writeFileAtomic writes data through a temp file in the same directory and a
+// rename, so a crash or a full disk mid-write cannot leave a truncated file.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".pig-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
 // Resolve makes path absolute against cwd, expanding a leading "~".
 func Resolve(path, cwd string) string {
 	if strings.HasPrefix(path, "~/") || path == "~" {

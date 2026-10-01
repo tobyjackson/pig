@@ -126,3 +126,45 @@ func TestDiff(t *testing.T) {
 		t.Fatalf("got %q", d)
 	}
 }
+
+// A command that floods stdout must not grow the captured buffer without
+// bound. The cap is generous, so this checks the mechanism, not the constant.
+func TestBashOutputIsCapped(t *testing.T) {
+	b := NewBash(t.TempDir(), "")
+	// yes prints forever; head limits it to well over the cap.
+	res := b.Execute(context.Background(), "1", json.RawMessage(`{"command":"yes x | head -c 12000000","timeout":30}`), nil)
+	if !strings.Contains(res.Content[0].Text, "was cut at") {
+		t.Fatalf("flooded output should report the cap: %q", res.Content[0].Text[:min(200, len(res.Content[0].Text))])
+	}
+}
+
+// A killed command leaves the file untouched, so a failed edit cannot truncate
+// the original.
+func TestEditLeavesFileOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "f.txt")
+	os.WriteFile(p, []byte("original"), 0o644)
+	e := NewEdit(dir)
+	res := e.Execute(context.Background(), "1", json.RawMessage(`{"path":"f.txt","edits":[{"oldText":"absent","newText":"x"}]}`), nil)
+	if !res.IsError {
+		t.Fatal("editing text that is not there should fail")
+	}
+	if data, _ := os.ReadFile(p); string(data) != "original" {
+		t.Fatalf("file changed after a failed edit: %q", data)
+	}
+}
+
+// A successful write leaves no temp files behind.
+func TestWriteLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	w := NewWrite(dir)
+	if res := w.Execute(context.Background(), "1", json.RawMessage(`{"path":"f.txt","content":"hi"}`), nil); res.IsError {
+		t.Fatal(res.Content[0].Text)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".pig-") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}

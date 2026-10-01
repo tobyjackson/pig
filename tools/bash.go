@@ -24,7 +24,8 @@ type Bash struct {
 	Env map[string]string
 }
 
-// NewBash makes the bash tool. shell may be empty to use $SHELL or bash.
+// NewBash makes the bash tool. shell is the program run with -c; empty
+// means bash.
 func NewBash(cwd, shell string) *Bash {
 	if shell == "" {
 		shell = "bash"
@@ -46,6 +47,11 @@ func (*Bash) Parameters() json.RawMessage {
 "timeout":{"type":"number","description":"Timeout in seconds (optional, no default timeout)"}},
 "required":["command"],"additionalProperties":false}`)
 }
+
+// maxCapturedOutput bounds how much of a command's output is held in memory.
+// Truncation already limits what the model sees, but a command like `yes`
+// would otherwise grow the buffer until the process ran out of memory.
+const maxCapturedOutput = 10 << 20
 
 // Run executes a command, streaming output to onData, and returns the exit
 // code. A zero timeout means none. The whole process group is killed on
@@ -132,10 +138,15 @@ func (b *Bash) Execute(ctx context.Context, _ string, args json.RawMessage, onUp
 	}
 	var mu sync.Mutex
 	var sb strings.Builder
+	capped := false
 	last := time.Time{}
 	code, err := b.Run(ctx, in.Command, time.Duration(in.Timeout*float64(time.Second)), func(p []byte) {
 		mu.Lock()
-		sb.Write(p)
+		if sb.Len() < maxCapturedOutput {
+			sb.Write(p)
+		} else {
+			capped = true
+		}
 		snapshot := sb.String()
 		mu.Unlock()
 		if onUpdate != nil && time.Since(last) > 250*time.Millisecond {
@@ -152,6 +163,9 @@ func (b *Bash) Execute(ctx context.Context, _ string, args json.RawMessage, onUp
 		details = map[string]any{"truncation": t, "fullOutputPath": path}
 		start := t.TotalLines - t.OutputLines + 1
 		text += fmt.Sprintf("\n\n[Showing lines %d-%d of %d. Full output: %s]", start, t.TotalLines, t.TotalLines, path)
+	}
+	if capped {
+		text += fmt.Sprintf("\n\n[Output was cut at %s; later output was not kept.]", FormatSize(maxCapturedOutput))
 	}
 	status := func(s string) string {
 		if text == "" {

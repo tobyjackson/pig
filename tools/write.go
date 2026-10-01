@@ -45,7 +45,7 @@ func (w *Write) Execute(ctx context.Context, _ string, args json.RawMessage, _ f
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return ErrorResult(fmt.Sprintf("Could not create directory: %v", err))
 	}
-	if err := os.WriteFile(abs, []byte(in.Content), 0o644); err != nil {
+	if err := writeFileAtomic(abs, []byte(in.Content), 0o644); err != nil {
 		return ErrorResult(fmt.Sprintf("Could not write file: %v", err))
 	}
 	return TextResult("Successfully wrote to " + in.Path)
