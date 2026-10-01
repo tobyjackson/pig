@@ -68,7 +68,7 @@ func buildSystemPrompt(o promptOptions) string {
 				}
 			}
 		}
-		addG("Be concise in your responses. Attempt to use less than 50 words. Honesty over helpfulness. Say what is wrong first. Verify before stating. Never claim code works without running it. Never state a number you did not measure. \"I do not know\" is a complete answer. Do not narrate a result you did not produce.")
+		addG("Be concise in your responses")
 		addG("Show file paths clearly when working with files")
 		toolsList := "(none)"
 		if len(snippets) > 0 {
