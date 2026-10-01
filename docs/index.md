@@ -18,3 +18,4 @@ Topics (`pig docs <topic>`):
 - rpc – drive pig from another program
 - sdk – use pig from Go
 - hotkeys – keyboard shortcuts in the interactive screen
+- crashes – where fatal errors are written

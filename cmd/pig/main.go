@@ -39,10 +39,14 @@ func (m *multi) String() string     { return strings.Join(*m, ",") }
 func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	args := os.Args[1:]
+	clean := installCrashLog(args)
+	if err := run(args); err != nil {
 		fmt.Fprintln(os.Stderr, "pig:", err)
+		clean()
 		os.Exit(1)
 	}
+	clean()
 }
 
 func run(args []string) error {

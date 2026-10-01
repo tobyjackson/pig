@@ -111,6 +111,7 @@ Use pig as a Go library too: see `pig docs sdk` and `examples/sdk`.
   models.json           extra providers and models
   auth.json             saved API keys (written by pig login)
   sessions/             one JSONL file per conversation
+  crashes/              a traceback for each fatal error
   skills/               SKILL.md folders the model can load on demand
   prompts/              markdown templates you run with /name
   extensions/           programs that add tools, commands, and hooks
@@ -130,6 +131,7 @@ Run `pig docs <topic>` or open the `docs/` folder:
 - `prompt-templates` – reusable prompts with arguments
 - `extensions` – add tools and hooks in any language
 - `sessions` – the session file format, branching, forking
+- `crashes` – where a fatal error leaves its traceback
 - `settings` – every settings.json key
 - `system-prompt` – replace or extend the prompt with SYSTEM.md
 - `models` – add providers with models.json
