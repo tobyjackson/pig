@@ -112,6 +112,41 @@ func TestContextFiles(t *testing.T) {
 	}
 }
 
+func TestContextFilesPreferOnePerFolder(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIG_DIR", filepath.Join(dir, "global"))
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agents"), 0o644)
+	os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("claude"), 0o644)
+	files := LoadContextFiles(dir)
+	if len(files) != 1 || files[0].Content != "agents" {
+		t.Fatalf("AGENTS.md should win alone, got %+v", files)
+	}
+
+	// CLAUDE.md is used when there is no AGENTS.md.
+	os.Remove(filepath.Join(dir, "AGENTS.md"))
+	files = LoadContextFiles(dir)
+	if len(files) != 1 || files[0].Content != "claude" {
+		t.Fatalf("CLAUDE.md should be the fallback, got %+v", files)
+	}
+
+	// The override replaces both.
+	os.WriteFile(filepath.Join(dir, "AGENTS.override.md"), []byte("override"), 0o644)
+	files = LoadContextFiles(dir)
+	if len(files) != 1 || files[0].Content != "override" {
+		t.Fatalf("override should win, got %+v", files)
+	}
+}
+
+func TestGlobalContextFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIG_DIR", dir)
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("global rules"), 0o644)
+	files := LoadContextFiles(t.TempDir())
+	if len(files) != 1 || files[0].Content != "global rules" {
+		t.Fatalf("got %+v", files)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (func() bool { return indexOf(s, sub) >= 0 })()
 }

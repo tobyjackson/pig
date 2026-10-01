@@ -1,5 +1,9 @@
 package resources
 
+// The context-file names and the first-match-wins rule are ported from pi:
+// packages/coding-agent/src/core/resource-loader.ts (loadContextFileFromDir)
+// Copyright (c) 2025 Mario Zechner, MIT licensed. See LICENSE.
+
 import (
 	"os"
 	"path/filepath"
@@ -12,17 +16,39 @@ type ContextFile struct {
 	Content string
 }
 
-// LoadContextFiles finds ~/.pig/AGENTS.md, then AGENTS.md and CLAUDE.md in
-// each folder from the root down to cwd. AGENTS.override.md in a folder
-// replaces both of the others there.
+// contextNames are tried in order in each folder. The first that exists wins,
+// so a folder with both an AGENTS.md and a CLAUDE.md contributes one file, not
+// two copies of the same instructions. An override replaces the rest.
+var contextNames = []string{"AGENTS.override.md", "AGENTS.md", "CLAUDE.md"}
+
+// loadContextFileFromDir returns the first context file present in dir, or a
+// zero ContextFile when the folder has none.
+func loadContextFileFromDir(dir string) ContextFile {
+	for _, name := range contextNames {
+		p := filepath.Join(dir, name)
+		if !isFile(p) {
+			continue
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		return ContextFile{Path: p, Content: string(data)}
+	}
+	return ContextFile{}
+}
+
+// LoadContextFiles finds the global context file in ~/.pig, then the first
+// context file in each folder from the root down to cwd. A folder's override
+// file replaces the others in that folder.
 func LoadContextFiles(cwd string) []ContextFile {
 	var out []ContextFile
-	add := func(p string) {
-		if data, err := os.ReadFile(p); err == nil && strings.TrimSpace(string(data)) != "" {
-			out = append(out, ContextFile{Path: p, Content: string(data)})
+	add := func(f ContextFile) {
+		if f.Path != "" && strings.TrimSpace(f.Content) != "" {
+			out = append(out, f)
 		}
 	}
-	add(filepath.Join(GlobalDir(), "AGENTS.md"))
+	add(loadContextFileFromDir(GlobalDir()))
 	var chain []string
 	for d := cwd; ; d = filepath.Dir(d) {
 		chain = append([]string{d}, chain...)
@@ -31,12 +57,7 @@ func LoadContextFiles(cwd string) []ContextFile {
 		}
 	}
 	for _, d := range chain {
-		if isFile(filepath.Join(d, "AGENTS.override.md")) {
-			add(filepath.Join(d, "AGENTS.override.md"))
-			continue
-		}
-		add(filepath.Join(d, "AGENTS.md"))
-		add(filepath.Join(d, "CLAUDE.md"))
+		add(loadContextFileFromDir(d))
 	}
 	return out
 }
