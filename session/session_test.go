@@ -23,15 +23,15 @@ func TestTreeBranchAndReload(t *testing.T) {
 	if len(ctx.Messages) != 2 || ctx.Messages[1].TextContent() != "other reply" {
 		t.Fatalf("branch wrong: %+v", ctx.Messages)
 	}
-	if len(s.Entries) != 4 {
+	if len(s.Entries()) != 4 {
 		t.Fatal("old branch should stay in the file")
 	}
 	re, err := Open(s.Path())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if re.ID() != s.ID() || len(re.Entries) != 4 || re.LeafID() != s.LeafID() {
-		t.Fatalf("reload mismatch: %d entries", len(re.Entries))
+	if re.ID() != s.ID() || len(re.Entries()) != 4 || re.LeafID() != s.LeafID() {
+		t.Fatalf("reload mismatch: %d entries", len(re.Entries()))
 	}
 }
 
@@ -67,6 +67,25 @@ func TestListAndFind(t *testing.T) {
 	if p, ok := FindByID(root, "/proj", s.ID()[:6]); !ok || p != s.Path() {
 		t.Fatal("partial id lookup failed")
 	}
+}
+
+// The TUI reads the store on its goroutine while the agent's OnMessage hook
+// appends to it, which used to fault on the shared map. Run with -race.
+func TestConcurrentAppendAndRead(t *testing.T) {
+	s := New("", "/x")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			s.AppendMessage(ai.UserMessage("hi"))
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		s.Name()
+		s.BranchEntries()
+		s.Entries()
+	}
+	<-done
 }
 
 func TestClone(t *testing.T) {

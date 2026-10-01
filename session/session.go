@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tobyjackson/pig/ai"
@@ -58,13 +59,24 @@ type Entry struct {
 	Data       json.RawMessage `json:"data,omitempty"`
 }
 
-// Session is an open session file plus its in-memory tree.
+// Session is an open session file plus its in-memory tree. The store is
+// written from the agent's goroutine (the OnMessage hook) and read from the
+// TUI's, so every field is guarded by mu.
 type Session struct {
-	Header  Header
-	Entries []Entry
-	path    string // empty means in-memory only
+	Header Header
+	path   string // empty means in-memory only
+
+	mu      sync.RWMutex
+	entries []Entry
 	byID    map[string]*Entry
 	leafID  string
+}
+
+// Entries returns a copy of every entry in the file, in write order.
+func (s *Session) Entries() []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]Entry(nil), s.entries...)
 }
 
 func newID() string {
@@ -112,6 +124,7 @@ func Open(path string) (*Session, error) {
 	}
 	defer f.Close()
 	s := &Session{path: path, byID: map[string]*Entry{}}
+	var entries []Entry
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1024*1024), 256*1024*1024)
 	first := true
@@ -131,16 +144,18 @@ func Open(path string) (*Session, error) {
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			return nil, fmt.Errorf("%s: bad line: %w", path, err)
 		}
-		s.Entries = append(s.Entries, e)
+		entries = append(entries, e)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	for i := range s.Entries {
-		s.byID[s.Entries[i].ID] = &s.Entries[i]
+	// Nothing else has the session yet, so no lock is needed.
+	s.entries = entries
+	for i := range s.entries {
+		s.byID[s.entries[i].ID] = &s.entries[i]
 	}
-	if n := len(s.Entries); n > 0 {
-		s.leafID = s.Entries[n-1].ID
+	if n := len(s.entries); n > 0 {
+		s.leafID = s.entries[n-1].ID
 	}
 	return s, nil
 }
@@ -152,15 +167,14 @@ func (s *Session) Path() string { return s.path }
 func (s *Session) ID() string { return s.Header.ID }
 
 // LeafID is the entry the next entry will hang from.
-func (s *Session) LeafID() string { return s.leafID }
-
-// Get returns an entry by id.
-func (s *Session) Get(id string) (*Entry, bool) {
-	e, ok := s.byID[id]
-	return e, ok
+func (s *Session) LeafID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.leafID
 }
 
 func (s *Session) append(e Entry) string {
+	s.mu.Lock()
 	e.ID = newID()
 	for s.byID[e.ID] != nil {
 		e.ID = newID()
@@ -170,10 +184,11 @@ func (s *Session) append(e Entry) string {
 		leaf := s.leafID
 		e.ParentID = &leaf
 	}
-	s.Entries = append(s.Entries, e)
-	s.byID[e.ID] = &s.Entries[len(s.Entries)-1]
+	s.entries = append(s.entries, e)
+	s.byID[e.ID] = &s.entries[len(s.entries)-1]
 	s.leafID = e.ID
 	s.writeLine(e)
+	s.mu.Unlock()
 	return e.ID
 }
 
@@ -235,6 +250,8 @@ func (s *Session) AppendCustom(customType string, data json.RawMessage) string {
 // Branch moves the leaf to an earlier entry. New entries then form a new
 // branch; nothing is deleted.
 func (s *Session) Branch(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.byID[id]; !ok {
 		return fmt.Errorf("no entry %s", id)
 	}
@@ -244,6 +261,14 @@ func (s *Session) Branch(id string) error {
 
 // Path from root to the current leaf, oldest first.
 func (s *Session) BranchEntries() []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.branchEntries()
+}
+
+// branchEntries is BranchEntries without the lock, for callers that already
+// hold one.
+func (s *Session) branchEntries() []Entry {
 	var out []Entry
 	id := s.leafID
 	for id != "" {

@@ -213,7 +213,7 @@ func handle(ctx context.Context, s *runtime.Session, c command, respond func(com
 	case "get_fork_messages":
 		ok(s.ForkPoints())
 	case "get_entries":
-		ok(map[string]any{"entries": s.Store.Entries, "leafId": s.Store.LeafID()})
+		ok(map[string]any{"entries": s.Store.Entries(), "leafId": s.Store.LeafID()})
 	case "get_tree":
 		ok(tree(s))
 	case "navigate_tree":
@@ -267,7 +267,7 @@ type node struct {
 func tree(s *runtime.Session) []*node {
 	byID := map[string]*node{}
 	var roots []*node
-	for _, e := range s.Store.Entries {
+	for _, e := range s.Store.Entries() {
 		n := &node{ID: e.ID, Type: e.Type, Children: []*node{}}
 		if e.Message != nil {
 			n.Type = e.Message.Role
