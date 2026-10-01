@@ -22,11 +22,16 @@ test files, so a passing run is not proof of broad coverage.
 
 ## Small is the point
 
-pig is deliberately one module of about 9k lines with four tools. pi has eight
-tools and twelve packages. Do not add a fifth tool, a new package, or a
-dependency without a clear reason, and prefer editing an existing file to
-creating one. The `go.mod` require list is intentionally tiny: the standard
-library plus three Charmbracelet modules for the TUI.
+pig is deliberately one module with four tools. pi has eight tools and twelve
+packages. Do not add a fifth tool, a new package, or a dependency without a
+clear reason, and prefer editing an existing file to creating one. The `go.mod`
+require list is intentionally tiny: the standard library plus three
+Charmbracelet modules for the TUI.
+
+Do not state a line count in the docs. It is wrong the moment someone edits a
+file, and it was already wrong twice: the README said 8k and this file said
+9k, because one counted tests and the other did not. Say what pig is, not how
+big.
 
 ## Ported from pi
 
@@ -38,10 +43,11 @@ tools/read.go  tools/bash.go  tools/edit.go  tools/write.go
 runtime/systemprompt.go  resources/skills.go  resources/context.go
 ```
 
-Their tool descriptions, JSON schemas, prompt snippets, the system prompt's
-wording and section order, and the context-file names and precedence must stay
-faithful to pi. If you change them, say in the commit why. `LICENSE` carries
-pi's copyright; keep that notice intact.
+pi is where pig came from, not where it is going. pig has diverged and does
+not track pi's releases, so these files are not frozen: fix them when they are
+wrong, even when the fix moves them away from pi. The header marks provenance
+and the MIT notice, nothing more. `LICENSE` carries pi's copyright; keep that
+notice intact.
 
 ## Conventions
 

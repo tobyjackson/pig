@@ -143,8 +143,8 @@ compatible, and it does not try to keep up with pi's releases.
 
 **Deliberately smaller.** pi is now twelve packages and about 390k lines of
 TypeScript, with eight built-in tools (bash, edit, find, grep, ls, powershell,
-read, write). pig is one Go module of about 8k lines with four tools. That is
-the point: small enough to read in an afternoon.
+read, write). pig is one Go module with four tools. That is the point: small
+enough to read in an afternoon.
 
 **Different in kind:**
 
@@ -159,8 +159,9 @@ the point: small enough to read in an afternoon.
 **Ported from pi, not invented here.** The tool descriptions and JSON schemas
 (`tools/*.go`), the system prompt's wording and section layout
 (`runtime/systemprompt.go`), and the skill-prompt format
-(`resources/skills.go`) are ported from pi's TypeScript source, and remain
-under pi's MIT licence. See [LICENSE](LICENSE).
+(`resources/skills.go`) started as ports of pi's TypeScript source. The
+headers record that provenance and pi's copyright; they are not a promise to
+stay aligned with pi. See [LICENSE](LICENSE).
 
 **What to take from pi now.** Not code. pi's
 [CHANGELOG](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/CHANGELOG.md)
