@@ -22,7 +22,7 @@ test files, so a passing run is not proof of broad coverage.
 
 ## Small is the point
 
-pig is deliberately one module with four tools. pi has eight tools and twelve
+pig is deliberately one module with four tools. pi has eight tools and many
 packages. Do not add a fifth tool, a new package, or a dependency without a
 clear reason, and prefer editing an existing file to creating one. The `go.mod`
 require list is intentionally tiny: the standard library plus three

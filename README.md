@@ -7,8 +7,8 @@ Everything else is added by you, through skills, prompt templates, and
 extensions.
 
 pig is not a fork and does not track pi. pi has since grown to eight tools
-(add find, grep, ls, powershell) and twelve packages; pig stays deliberately
-small. See [Differences from pi](#differences-from-pi).
+(add find, grep, ls, powershell); pig stays deliberately small. See
+[Differences from pi](#differences-from-pi).
 
 pig contains material ported from pi, which is MIT licensed. See
 [LICENSE](LICENSE).
@@ -143,10 +143,10 @@ Run `pig docs <topic>` or open the `docs/` folder:
 pig started as a port of pi and has since diverged. It is not byte-for-byte
 compatible, and it does not try to keep up with pi's releases.
 
-**Deliberately smaller.** pi is now twelve packages and about 390k lines of
-TypeScript, with eight built-in tools (bash, edit, find, grep, ls, powershell,
-read, write). pig is one Go module with four tools. That is the point: small
-enough to read in an afternoon.
+**Deliberately smaller.** pi has eight built-in tools (bash, edit, find,
+grep, ls, powershell, read, write) and a much larger codebase. pig is one Go
+module with four tools. That is the point: small enough to read in an
+afternoon.
 
 **Different in kind:**
 
