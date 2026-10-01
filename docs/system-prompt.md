@@ -27,7 +27,7 @@ rather than the project's. A minimal one:
 ```markdown
 # How to work
 
-Answer in fewer than 50 words. Lead with the problem, not a summary.
+Answer briefly. Lead with the problem, not a summary.
 
 Never commit, push, or tag unless asked.
 
