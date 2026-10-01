@@ -35,7 +35,13 @@ At session start, read `~/.pig/MEMORY.toml`. If it is missing, create it.
 After every step, rewrite it before doing anything else, with the same keys
 each time: `updated_at`, `task`, `next_step`, `blocked_on`, `where`,
 `open_decisions`, `notes_for_next_step`. Keep facts that must survive across
-sessions in its body. `TODO.txt` lists work in progress.
+sessions in its body. `MEMORY.toml` holds session state; `TODO.txt` holds
+work not yet done.
+
+`~/.pig/TODO.txt` lists open work only, one item per line, each dated
+`(added YYYY-MM-DD)`. Completed work is not listed: `git log` is the archive.
+Never keep a daily file or an archive copy, so there is only one place to
+look.
 ```
 
 That last paragraph is how you get memory between sessions without pig
