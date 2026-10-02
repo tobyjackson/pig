@@ -9,7 +9,8 @@ releases.
 ## Commands
 
 ```sh
-go build -o pig ./cmd/pig      # build
+go build -o pig ./cmd/pig      # build (reports version "dev")
+./build.sh                     # build with the git tag as the version
 go test ./...                  # tests (all of them; there is no fast subset)
 go vet ./...                   # vet
 gofmt -l .                     # must print nothing
@@ -89,6 +90,7 @@ draft release.
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-The version a binary reports is injected at build time with
-`-X main.version=${tag}`, so it is empty in a plain `go build`. Do not publish
-a release: leave the draft for a human.
+The version a binary reports is stamped in by `build.sh`, which reads it from
+`git describe`; the release workflow calls the same script, so a local build
+and a published one cannot drift. A plain `go build` reports `dev`. Do not
+publish a release: leave the draft for a human.

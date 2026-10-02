@@ -49,9 +49,10 @@ jobs:
           [ "$GOOS" = windows ] && ext=".exe"
           out="pig-${GOOS}-${GOARCH}${ext}"
           # -s -w drop the symbol table and DWARF: smaller, and the panic
-          # traces users need are still there. The version comes from the tag.
-          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o "dist/${out}" ./cmd/pig
+          # traces users need are still there. The version is stamped in from
+          # the tag by build.sh, the same way a local build does it, so the two
+          # cannot drift.
+          ./build.sh -o "dist/${out}"
 
           # Only a binary for this runner's own platform can be executed, and
           # even then not always (an arm64 macOS runner can't run amd64). Check

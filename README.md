@@ -24,8 +24,11 @@ go install github.com/tobyjackson/pig/cmd/pig@latest
 Or from a clone of this repo:
 
 ```sh
-go build -o pig ./cmd/pig
+./build.sh
 ```
+
+`build.sh` stamps the version in from `git describe`, so a local build reports
+the same thing a release does. A bare `go build` works too, but reports `dev`.
 
 ### Prebuilt binaries
 
@@ -188,13 +191,13 @@ git push origin v0.1.0
 ```
 
 The workflow tests, cross-compiles five binaries, writes `SHA256SUMS`, and
-opens a **draft** release. Read the notes, then publish it on GitHub. The
-version a binary reports comes from the tag, injected with `-X main.version`.
+opens a **draft** release. Read the notes, then publish it on GitHub. Both the
+workflow and a local build stamp the version in with `build.sh`, from the tag.
 
 To cut a release by hand, for one platform:
 
 ```sh
-go build -trimpath -ldflags "-s -w -X main.version=v0.1.0" -o pig ./cmd/pig
+./build.sh
 ./pig --version
 ```
 

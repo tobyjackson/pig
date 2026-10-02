@@ -29,8 +29,9 @@ import (
 //
 //	go build -ldflags "-X main.version=v1.2.3"
 //
-// A plain `go build` uses the value below.
-var version = "0.1.0"
+// A plain `go build` uses the value below, which is deliberately not a
+// release number: an un-stamped build should not claim to be one.
+var version = "dev"
 
 // multi collects a repeatable flag.
 type multi []string
