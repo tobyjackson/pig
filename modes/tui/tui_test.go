@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -414,5 +417,78 @@ func TestViewDump(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "hello transcript") {
 		t.Fatal("dumped view missing note")
+	}
+}
+
+// tornReader delivers a byte stream in fixed-size chunks, so a mouse report
+// can be made to straddle a read boundary the way bubbletea's 256-byte buffer
+// tears one.
+type tornReader struct {
+	data []byte
+	pos  int
+	max  int
+}
+
+func (c *tornReader) Read(p []byte) (int, error) {
+	if c.pos >= len(c.data) {
+		return 0, io.EOF
+	}
+	end := c.pos + c.max
+	if end > len(c.data) {
+		end = len(c.data)
+	}
+	n := copy(p, c.data[c.pos:end])
+	c.pos += n
+	time.Sleep(10 * time.Millisecond)
+	return n, nil
+}
+
+// A mouse report that the input buffer splits must not reach the textarea.
+// bubbletea v1 parses a torn SGR report as an Alt-'[' plus ordinary runes,
+// which the textarea would otherwise insert into the prompt.
+func TestMouseReportDoesNotReachTheTextarea(t *testing.T) {
+	report := []byte("\x1b[<65;32;30M") // wheel down
+	// Pad so the report straddles the 256-byte read boundary.
+	blob := append(bytes.Repeat([]byte{'a'}, 256-len(report)+6), report...)
+
+	m := newTestModel(t, scriptedStream(nil))
+	m.ta.Focus()
+	prog := tea.NewProgram(m, tea.WithInput(&tornReader{data: blob, max: 256}), tea.WithoutRenderer(), tea.WithMouseCellMotion())
+	go func() { time.Sleep(400 * time.Millisecond); prog.Quit() }()
+	if _, err := prog.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.ta.Value(); strings.ContainsAny(got, "[<;M") {
+		t.Fatalf("a torn mouse report leaked into the prompt: %q", got)
+	}
+}
+
+// A fragment that looks like the start of a report but never completes must
+// still reach the prompt: filtering cannot swallow real typing.
+func TestMouseFilterKeepsRealTyping(t *testing.T) {
+	m := newTestModel(t, scriptedStream(nil))
+	m.ta.Focus()
+	// Alt+'[' alone is held as a possible report start...
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
+	if m.ta.Value() != "" {
+		t.Fatalf("held fragment was inserted early: %q", m.ta.Value())
+	}
+	// ...but ordinary typing flushes it back.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	if got := m.ta.Value(); got != "[hello" {
+		t.Fatalf("real typing was lost: got %q, want %q", got, "[hello")
+	}
+}
+
+// Ordinary typing that happens to look like a mouse-report fragment must not
+// be swallowed: a bare "<M>" (a generic type argument) is real text.
+func TestMouseFilterKeepsGenericTyping(t *testing.T) {
+	for _, s := range []string{"<M>", "<65;32;30M>", "a<Mb"} {
+		m := newTestModel(t, scriptedStream(nil))
+		m.ta.Focus()
+		m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+		if got := m.ta.Value(); got != s {
+			t.Errorf("typing %q became %q", s, got)
+		}
 	}
 }

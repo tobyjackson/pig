@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -127,6 +128,7 @@ type model struct {
 	hideToolRows bool // Alt+T: drop the model's tool blocks entirely
 	lastCtrlC    time.Time
 	lastEsc      time.Time
+	mouseFrag    string // held fragment of a mouse report torn by the input buffer
 	pick         *picker
 	follow       bool // viewport follows new output
 	spinner      int
@@ -854,7 +856,60 @@ func textOf(cs []ai.Content) string {
 	return sb.String()
 }
 
+// mouseLeakWhole matches a complete SGR mouse report whose escape byte was
+// dropped but whose '[' survived. mouseLeakPrefix and mouseLeakTail match the
+// fragments after the escape byte was itself taken as Alt.
+var (
+	mouseLeakWhole  = regexp.MustCompile(`^\[<[0-9;]*[Mm]$`)
+	mouseLeakPrefix = regexp.MustCompile(`^\[?<[0-9;]*[Mm]?$`)
+	mouseLeakTail   = regexp.MustCompile(`^\[?<[0-9;]*[Mm]$`)
+)
+
+// filterMouseReport swallows the fragments of a mouse report that bubbletea's
+// 256-byte input buffer tore apart. A report that straddles a read boundary
+// loses its escape byte: the rest arrives as ordinary runes, which the textarea
+// would insert into the prompt. Wheel events arrive in bursts, so this happens
+// on an ordinary scroll. It reports whether the message was consumed.
+func (m *model) filterMouseReport(k tea.KeyMsg) bool {
+	if k.Type != tea.KeyRunes || k.Paste {
+		m.flushMouseFrag()
+		return false
+	}
+	s := string(k.Runes)
+	switch {
+	case k.Alt && s == "[" && m.mouseFrag == "":
+		// The escape byte was taken as Alt; this may be the report's start.
+		m.mouseFrag = "["
+		return true
+	case m.mouseFrag != "" && mouseLeakPrefix.MatchString(m.mouseFrag+s):
+		m.mouseFrag += s
+		if mouseLeakTail.MatchString(m.mouseFrag) {
+			m.mouseFrag = ""
+		}
+		return true
+	case mouseLeakWhole.MatchString(s):
+		// A whole report that kept its '['; requiring the '[' avoids eating
+		// ordinary typing like a generic <M>.
+		return true
+	}
+	m.flushMouseFrag()
+	return false
+}
+
+// flushMouseFrag hands a held fragment back to the textarea, so text that
+// looked like the start of a report but never completed is not lost.
+func (m *model) flushMouseFrag() {
+	if m.mouseFrag == "" {
+		return
+	}
+	m.ta.InsertString(m.mouseFrag)
+	m.mouseFrag = ""
+}
+
 func (m *model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.filterMouseReport(k) {
+		return m, nil
+	}
 	key := k.String()
 	if m.pick != nil {
 		return m.pickerKey(key)
