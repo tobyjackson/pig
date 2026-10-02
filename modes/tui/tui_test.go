@@ -266,6 +266,87 @@ func TestArgsPreview(t *testing.T) {
 	}
 }
 
+// toolBlock builds a finished tool block, the shape a collapsed call has.
+func toolBlock(name, args, output string, isErr bool) block {
+	return block{kind: "tool", name: name, args: args, output: output, done: true, isErr: isErr}
+}
+
+// TestToolLinesFitTheColumn guards the case that used to overflow: a bash
+// command longer than the work column was written without the column's wrap
+// style, so it ran past the divider and the terminal cut it off.
+func TestToolLinesFitTheColumn(t *testing.T) {
+	m := newTestModel(t, scriptedStream(nil))
+	m.width, m.height = 120, 30
+	m.layout()
+	col := m.colWidth(m.rightW())
+	if col <= 0 {
+		t.Fatal("test needs a wide screen")
+	}
+
+	long := strings.Repeat("verylongargument ", 12)
+	args, err := json.Marshal(map[string]string{"command": "cd /tmp && " + long})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.blocks = []block{toolBlock("bash", string(args), "ok", false)}
+
+	for _, expanded := range []bool{false, true} {
+		m.showTools = expanded
+		out := m.renderWork()
+		if !strings.Contains(out, "verylongargument") {
+			t.Errorf("expanded=%v: tool line vanished:\n%s", expanded, out)
+		}
+		// padLeft adds the column's margin, so the rendered line may be
+		// wider than colWidth but never wider than the column itself.
+		for _, l := range strings.Split(out, "\n") {
+			if w := ansi.StringWidth(l); w > m.rightW() {
+				t.Errorf("expanded=%v: tool line is %d wide, column is %d: %q", expanded, w, m.rightW(), l)
+			}
+		}
+	}
+}
+
+// TestAltTHidesToolLines checks the Alt+T state, including the rule that a
+// failed tool stays on screen so an error is never silent.
+func TestAltTHidesToolLines(t *testing.T) {
+	m := newTestModel(t, scriptedStream(nil))
+	m.width, m.height = 120, 30
+	m.layout()
+	m.blocks = []block{
+		toolBlock("read", `{"path":"/tmp/ok.go"}`, "contents", false),
+		toolBlock("bash", `{"command":"false"}`, "boom", true),
+	}
+
+	if m.hideToolRows {
+		t.Fatal("tool rows should start visible")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}, Alt: true})
+	if !m.hideToolRows {
+		t.Fatal("alt+t should hide tool rows")
+	}
+
+	out := m.renderWork()
+	if strings.Contains(out, "/tmp/ok.go") {
+		t.Errorf("a successful tool line survived alt+t:\n%s", out)
+	}
+	// The failed tool collapses to its header, so look for the command and
+	// the error mark rather than the output, which a collapsed block hides.
+	if !strings.Contains(out, "✗") || !strings.Contains(out, "false") {
+		t.Errorf("a failed tool line was hidden by alt+t:\n%s", out)
+	}
+
+	// Hidden wins over an expanded column, as agreed.
+	m.showTools = true
+	if out := m.renderWork(); strings.Contains(out, "/tmp/ok.go") {
+		t.Errorf("expanded output overrode alt+t:\n%s", out)
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}, Alt: true})
+	if m.hideToolRows {
+		t.Fatal("alt+t should toggle back")
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	if got := truncate("hello", 10); got != "hello" {
 		t.Errorf("short truncate = %q", got)
