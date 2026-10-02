@@ -27,10 +27,10 @@ import (
 // Styles used across the screen.
 var (
 	dim      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	userSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+	userSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Background(lipgloss.Color("234")).Bold(true).Padding(1, 1)
 	userText = lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
-	asstSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)
-	asstText = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
+	asstSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("224")).Background(lipgloss.Color("234")).Bold(true).Padding(1, 1)
+	asstText = lipgloss.NewStyle().Foreground(lipgloss.Color("224"))
 	thinkSt  = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
 	toolSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("109"))
 	toolOut  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -124,6 +124,7 @@ type model struct {
 	statusAt     time.Time
 	showTools    bool
 	showThink    bool
+	hideToolRows bool // Alt+T: drop the model's tool blocks entirely
 	lastCtrlC    time.Time
 	lastEsc      time.Time
 	pick         *picker
@@ -167,13 +168,13 @@ func (m *model) loadHistory() {
 }
 
 func (m *model) header() string {
-	art := strings.TrimRight(`
+	art := asstText.Render(strings.Trim(`
  ____   ___   ____
 |  _ \ |_ _| / ___|
 | |_) | | | | |  _
 |  __/  | | | |_| |
 |_|    |___| \____|
-`, "\n")
+`, "\n"))
 	if m.version != "" {
 		art += "\n" + dim.Render("v"+m.version)
 	}
@@ -388,14 +389,21 @@ func (m *model) colWidth(col int) int {
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// bodyPanel fills a message body with a soft background and a one-cell
+// margin on every side, so replies read as inset cards rather than loose
+// text.
+func bodyPanel(wrap lipgloss.Style) lipgloss.Style {
+	return wrap.Background(lipgloss.Color("235")).Padding(1, 1)
+}
+
 func (m *model) renderBlock(sb *strings.Builder, b block, wrap lipgloss.Style) {
 	switch b.kind {
 	case "user":
-		sb.WriteString(padLeft(userSt.Render("you"), false) + "\n")
-		sb.WriteString(padLeft(wrap.Render(userText.Render(b.text)), true) + "\n\n")
+		sb.WriteString(padLeft(userSt.Render("👤 you"), false) + "\n")
+		sb.WriteString(padLeft(bodyPanel(wrap).Render(userText.Render(b.text)), true) + "\n\n")
 	case "text":
-		sb.WriteString(padLeft(asstSt.Render("pig"), false) + "\n")
-		sb.WriteString(padLeft(wrap.Render(asstText.Render(b.text)), true) + "\n\n")
+		sb.WriteString(padLeft(asstSt.Render("🐷 pig"), false) + "\n")
+		sb.WriteString(padLeft(bodyPanel(wrap).Render(asstText.Render(b.text)), true) + "\n\n")
 	case "header":
 		sb.WriteString(padLeft(b.text, false) + "\n\n")
 	case "thinking":
@@ -413,6 +421,11 @@ func (m *model) renderBlock(sb *strings.Builder, b block, wrap lipgloss.Style) {
 			sb.WriteString(padLeft(dim.Render(fmt.Sprintf("thinking… (%d %s · Ctrl+O to read)", n, unit)), false) + "\n\n")
 		}
 	case "tool":
+		// Alt+T hides the model's tool blocks outright. A failed tool stays
+		// visible whatever the setting, so an error is never silent.
+		if m.hideToolRows && !b.isErr {
+			break
+		}
 		// A finished tool collapses to one line, in step with the activity
 		// column that showed it running. Ctrl+O expands it again.
 		if b.done && !m.showTools {
@@ -420,11 +433,11 @@ func (m *model) renderBlock(sb *strings.Builder, b block, wrap lipgloss.Style) {
 			if b.isErr {
 				mark, st = "✗", errSt
 			}
-			sb.WriteString(padLeft(st.Render("▶ "+b.name+" "+argsPreview(b.name, b.args)+"  "+mark), false) + "\n\n")
+			sb.WriteString(padLeft(wrap.Render(st.Render("▶ "+b.name+" "+argsPreview(b.name, b.args)+"  "+mark)), false) + "\n\n")
 			break
 		}
 		head := toolSt.Render("▶ " + b.name + " " + argsPreview(b.name, b.args))
-		sb.WriteString(padLeft(head, false) + "\n")
+		sb.WriteString(padLeft(wrap.Render(head), false) + "\n")
 		if b.output != "" {
 			out := b.output
 			lines := strings.Split(out, "\n")
@@ -901,6 +914,10 @@ func (m *model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showThink = !m.showThink
 		m.refresh()
 		return m, nil
+	case "alt+t":
+		m.hideToolRows = !m.hideToolRows
+		m.refresh()
+		return m, nil
 	case "ctrl+x":
 		m.copyLast()
 		return m, nil
@@ -1090,6 +1107,7 @@ func (m *model) slashCommand(text string) (bool, tea.Cmd) {
   Shift+Tab      next thinking level
   Ctrl+O         expand/collapse work output and thinking
   Ctrl+T         show/hide thinking entirely
+  Alt+T          show/hide tool calls (errors always stay)
   Ctrl+X         copy the last reply
   Ctrl+G         edit the prompt in $EDITOR
   Tab            complete a file path

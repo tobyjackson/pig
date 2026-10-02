@@ -13,6 +13,7 @@
 | Shift+Tab | next thinking level |
 | Ctrl+O | expand or collapse tool output and thinking |
 | Ctrl+T | show or hide thinking |
+| Alt+T | show or hide tool calls; failed tools always stay |
 | Ctrl+X | copy the last reply |
 | Ctrl+G | edit the prompt in $EDITOR |
 | Tab | complete a file path |
