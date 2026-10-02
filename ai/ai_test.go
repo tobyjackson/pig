@@ -53,6 +53,16 @@ func TestAnthropicRequestShape(t *testing.T) {
 	if hb["thinking"].(map[string]any)["type"] != "enabled" {
 		t.Fatal("haiku should use budget_tokens")
 	}
+	// Off is sent explicitly, except where the model cannot turn it off.
+	off := buildAnthropicRequest(m, Context{Messages: []Message{UserMessage("x")}}, Options{ThinkingLevel: "off"})
+	if off["thinking"].(map[string]any)["type"] != "disabled" {
+		t.Fatalf("off should send thinking.type=disabled, got %v", off["thinking"])
+	}
+	f, _ := (&Registry{Models: builtinModels()}).Find("claude-fable-5-1")
+	fb := buildAnthropicRequest(f, Context{Messages: []Message{UserMessage("x")}}, Options{ThinkingLevel: "off"})
+	if _, ok := fb["thinking"]; ok {
+		t.Fatalf("always-on models must not be sent disabled, got %v", fb["thinking"])
+	}
 }
 
 func TestOpenAIStreamToolCall(t *testing.T) {
@@ -96,6 +106,25 @@ func TestOpenAIStreamToolCall(t *testing.T) {
 	}
 	if final.Usage.Input != 10 || final.Usage.Output != 5 {
 		t.Fatalf("usage: %+v", final.Usage)
+	}
+}
+
+func TestOpenAIThinkingOffSendsNone(t *testing.T) {
+	m, _ := (&Registry{Models: builtinModels()}).Find("openrouter/deepseek/deepseek-v4.1-flash")
+	// "off" must reach OpenRouter as an explicit effort, otherwise the
+	// provider's own default turns thinking back on.
+	body := buildOpenAIRequest(m, Context{Messages: []Message{UserMessage("hi")}}, Options{ThinkingLevel: "off"})
+	r, ok := body["reasoning"].(map[string]any)
+	if !ok || r["effort"] != "none" {
+		t.Fatalf("off should send reasoning.effort=none, got %v", body["reasoning"])
+	}
+	if _, ok := body["reasoning_effort"]; ok {
+		t.Fatal("openrouter must not use the flat reasoning_effort field")
+	}
+	// A real level goes through the nested object too.
+	body = buildOpenAIRequest(m, Context{Messages: []Message{UserMessage("hi")}}, Options{ThinkingLevel: "low"})
+	if body["reasoning"].(map[string]any)["effort"] != "low" {
+		t.Fatalf("level should map to reasoning.effort, got %v", body["reasoning"])
 	}
 }
 

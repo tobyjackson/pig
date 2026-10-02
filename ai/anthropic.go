@@ -234,6 +234,10 @@ func buildAnthropicRequest(m Model, c Context, opts Options) map[string]any {
 			body["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
 			body["output_config"] = map[string]any{"effort": effort}
 		}
+	} else if m.Reasoning && !alwaysThinks(m.ID) {
+		// Say so explicitly. pi does, and an absent field is a request to use
+		// whatever the provider defaults to rather than a request to stay off.
+		body["thinking"] = map[string]any{"type": "disabled"}
 	}
 	return body
 }
@@ -246,6 +250,12 @@ func usesBudgetTokens(id string) bool {
 		}
 	}
 	return false
+}
+
+// alwaysThinks is true for models that cannot turn thinking off, where
+// asking for "disabled" is not a request the API accepts.
+func alwaysThinks(id string) bool {
+	return strings.Contains(id, "fable-5")
 }
 
 func anthropicMessages(msgs []Message, m Model) []map[string]any {

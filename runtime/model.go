@@ -53,10 +53,10 @@ func (s *Session) pickThinking() {
 		level = s.Settings.DefaultThinkingLevel
 	}
 	if level == "" {
-		level = "high"
+		level = "off"
 	}
 	if !ai.ValidThinkingLevel(level) {
-		level = "high"
+		level = "off"
 	}
 	s.Agent.ThinkingLevel = level
 }

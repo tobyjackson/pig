@@ -209,12 +209,24 @@ func buildOpenAIRequest(m Model, c Context, opts Options) map[string]any {
 		}
 		body["tools"] = tools
 	}
-	if m.Reasoning && opts.ThinkingLevel != "" && opts.ThinkingLevel != "off" {
-		effort := opts.ThinkingLevel
-		if effort == "xhigh" || effort == "max" {
-			effort = "high"
+	if m.Reasoning {
+		switch {
+		case opts.ThinkingLevel == "" || opts.ThinkingLevel == "off":
+			// OpenRouter normalises reasoning through a nested object and falls
+			// back to the provider's own default when it is absent, so "off" has
+			// to be sent as effort "none" or the model thinks anyway.
+			if m.Provider == "openrouter" {
+				body["reasoning"] = map[string]any{"effort": "none"}
+			}
+		case m.Provider == "openrouter":
+			body["reasoning"] = map[string]any{"effort": opts.ThinkingLevel}
+		default:
+			effort := opts.ThinkingLevel
+			if effort == "xhigh" || effort == "max" {
+				effort = "high"
+			}
+			body["reasoning_effort"] = effort
 		}
-		body["reasoning_effort"] = effort
 	}
 	return body
 }
