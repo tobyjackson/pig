@@ -178,7 +178,7 @@ func (m *model) header() string {
 |_|    |___| \____|
 `, "\n"))
 	if m.version != "" {
-		art += "\n" + dim.Render("v"+m.version)
+		art += "\n" + dim.Render(m.version)
 	}
 	return art
 }
