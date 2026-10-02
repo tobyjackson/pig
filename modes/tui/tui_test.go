@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tobyjackson/pig/ai"
 	"github.com/tobyjackson/pig/runtime"
@@ -283,6 +284,34 @@ func TestSlashHint(t *testing.T) {
 	m.ta.SetValue("plain text")
 	if got := m.slashHint(); got != "" {
 		t.Fatalf("slashHint for plain text = %q, want empty", got)
+	}
+}
+
+func TestFooterFitsOneLine(t *testing.T) {
+	m := newTestModel(t, scriptedStream(nil))
+	m.s.Opts.Cwd = "/Users/toby/code/some/long/project/path"
+	m.setStatus("a status that is long enough to matter")
+	for _, w := range []int{12, 30, 60, 100, 200} {
+		m.width, m.height = w, 30
+		m.layout()
+		out := m.View()
+		if got := len(strings.Split(out, "\n")); got != m.height {
+			t.Errorf("width %d: view is %d lines, want %d", w, got, m.height)
+		}
+		for _, l := range strings.Split(out, "\n") {
+			if ansi.StringWidth(l) > w {
+				t.Errorf("width %d: line overflows: %q", w, l)
+			}
+		}
+	}
+	// The model key is the last part dropped, so it survives a narrow screen.
+	m.width, m.height = 40, 30
+	m.layout()
+	if !strings.Contains(m.footer(), m.s.Model().Key()) {
+		t.Errorf("footer dropped the model key: %q", m.footer())
+	}
+	if strings.Contains(m.footer(), "/Users/toby/code") {
+		t.Errorf("footer kept the cwd at 40 cols: %q", m.footer())
 	}
 }
 

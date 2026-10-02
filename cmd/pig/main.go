@@ -229,7 +229,7 @@ func run(args []string) error {
 		return rpc.Run(s, os.Stdin, os.Stdout)
 	}
 	quiet := s.Settings.QuietStartup != nil && *s.Settings.QuietStartup
-	return tui.Run(s, quiet)
+	return tui.Run(s, quiet, version)
 }
 
 func splitList(s string) []string {

@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tobyjackson/pig/ai"
 	"github.com/tobyjackson/pig/modes/export"
@@ -28,9 +29,10 @@ var (
 	dim      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	userSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 	userText = lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
-	asstSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	asstSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)
+	asstText = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
 	thinkSt  = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
-	toolSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	toolSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("109"))
 	toolOut  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	errSt    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	noteSt   = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
@@ -43,6 +45,16 @@ var (
 // padX is the left/right margin applied to transcript blocks so text does not
 // touch the screen edge.
 const padX = 2
+
+// The screen splits into a chat column on the left and a work column on the
+// right. The left is only what was said; every thinking block and tool call
+// lives on the right, where it can be scrolled back through and collapsed.
+// The edit line sits under the chat column only. On narrow screens the split
+// is dropped and everything shares one column.
+const (
+	paneMinTotal = 100 // below this width the screen stays single-column
+	paneGutter   = 2   // divider bar and one space between the columns
+)
 
 // padLeft adds the left margin and optional dim gutter marker.
 func padLeft(s string, marker bool) string {
@@ -61,7 +73,7 @@ func padLeft(s string, marker bool) string {
 
 // block is one rendered piece of the transcript.
 type block struct {
-	kind string // user | text | thinking | tool | note | error | bash
+	kind string // user | text | header | thinking | tool | note | error | bash
 	text string
 	// tool blocks
 	name   string
@@ -99,6 +111,8 @@ type model struct {
 	s            *runtime.Session
 	events       chan runtime.Event
 	vp           viewport.Model
+	vpR          viewport.Model // work column
+	followR      bool           // work column follows new output
 	ta           textarea.Model
 	width        int
 	height       int
@@ -116,25 +130,26 @@ type model struct {
 	follow       bool // viewport follows new output
 	spinner      int
 	quiet        bool
+	version      string
 	pendingLogin string
 }
 
 // Run starts the interactive screen and blocks until the user quits.
-func Run(s *runtime.Session, quietStartup bool) error {
+func Run(s *runtime.Session, quietStartup bool, version string) error {
 	// Skip the terminal background-colour query: it can stall startup for
 	// seconds on terminals that never answer, and our colours suit dark
 	// and light backgrounds well enough.
 	lipgloss.SetHasDarkBackground(true)
 	ta := textarea.New()
-	ta.Placeholder = "Ask anything. Enter sends, Ctrl+J adds a line, / for commands, ! for shell."
+	ta.Placeholder = "/ for commands, ! for shell · /help · /hotkeys"
 	ta.ShowLineNumbers = false
 	ta.Prompt = "> "
 	ta.CharLimit = 0
 	ta.SetHeight(3)
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 	ta.Focus()
-	m := &model{s: s, events: make(chan runtime.Event, 256), ta: ta, showTools: false,
-		showThink: s.Settings.HideThinkingBlock == nil || !*s.Settings.HideThinkingBlock, follow: true, quiet: quietStartup}
+	m := &model{s: s, events: make(chan runtime.Event, 256), ta: ta, showTools: false, version: version,
+		showThink: s.Settings.HideThinkingBlock == nil || !*s.Settings.HideThinkingBlock, follow: true, followR: true, quiet: quietStartup}
 	s.Subscribe(func(e runtime.Event) { m.events <- e })
 	m.loadHistory()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -147,33 +162,22 @@ func (m *model) loadHistory() {
 		m.addMessage(msg)
 	}
 	if !m.quiet {
-		m.blocks = append(m.blocks, block{kind: "note", text: m.header()})
+		m.blocks = append(m.blocks, block{kind: "header", text: m.header()})
 	}
 }
 
 func (m *model) header() string {
-	st := m.s.Stats()
-	lines := []string{
-		fmt.Sprintf("pig · %s · thinking %s", m.s.Model().Key(), m.s.ThinkingLevel()),
-		fmt.Sprintf("cwd %s", m.s.Opts.Cwd),
+	art := strings.TrimRight(`
+ ____   ___   ____
+|  _ \ |_ _| / ___|
+| |_) | | | | |  _
+|  __/  | | | |_| |
+|_|    |___| \____|
+`, "\n")
+	if m.version != "" {
+		art += "\n" + dim.Render("v"+m.version)
 	}
-	if st.SessionFile != "" {
-		lines = append(lines, "session "+st.SessionFile)
-	} else {
-		lines = append(lines, "session: not saved (--no-session)")
-	}
-	if n := len(m.s.Skills); n > 0 {
-		lines = append(lines, fmt.Sprintf("%d skill(s), %d prompt template(s)", n, len(m.s.Prompts)))
-	}
-	if m.s.Exts != nil && len(m.s.Exts.Extensions) > 0 {
-		var names []string
-		for _, e := range m.s.Exts.Extensions {
-			names = append(names, e.Ready.Name)
-		}
-		lines = append(lines, "extensions: "+strings.Join(names, ", "))
-	}
-	lines = append(lines, "/help for commands, /hotkeys for keys")
-	return strings.Join(lines, "\n")
+	return art
 }
 
 // addMessage converts a stored message into transcript blocks.
@@ -233,25 +237,83 @@ func (m *model) layout() {
 	if m.width == 0 {
 		return
 	}
-	m.ta.SetWidth(m.width - 2*padX)
-	taH := m.ta.Height()
-	extra := 0
-	if m.pick != nil {
-		extra = 0
-	}
-	h := m.height - taH - 2 - extra // footer + spacer
-	if h < 3 {
-		h = 3
-	}
+	m.ta.SetWidth(m.leftW() - 2*padX)
+	lw, rw := m.leftW(), m.rightW()
 	if m.vp.Width == 0 {
-		m.vp = viewport.New(m.width, h)
+		m.vp = viewport.New(lw, m.bodyH())
 	}
-	m.vp.Width = m.width
-	m.vp.Height = h
+	m.vp.Width = lw
+	if rw > 0 {
+		if m.vpR.Width == 0 {
+			m.vpR = viewport.New(rw, m.bodyH())
+		}
+		m.vpR.Width = rw
+	}
+	m.syncHeights()
 	m.refresh()
 }
 
-// refresh re-renders the transcript into the viewport.
+// bodyH is the height of the two columns: everything above the status line.
+func (m *model) bodyH() int {
+	h := m.height - 1
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+// syncHeights sizes the two columns to the current editor height and slash
+// hint. It is cheap, so view calls it too: the hint comes and goes without a
+// resize, and both columns have to keep up.
+func (m *model) syncHeights() {
+	if m.width == 0 {
+		return
+	}
+	hl := m.bodyH() - m.ta.Height()
+	if m.slashHint() != "" {
+		hl--
+	}
+	if hl < 1 {
+		hl = 1
+	}
+	if m.vp.Height != hl {
+		m.vp.Height = hl
+		if m.follow {
+			m.vp.GotoBottom()
+		}
+	}
+	if m.rightW() > 0 && m.vpR.Height != m.bodyH() {
+		m.vpR.Height = m.bodyH()
+		if m.followR {
+			m.vpR.GotoBottom()
+		}
+	}
+}
+
+// rightW is the width of the work column, or 0 when the split is off.
+func (m *model) rightW() int {
+	if m.width < paneMinTotal {
+		return 0
+	}
+	return m.width - paneGutter - m.leftW()
+}
+
+// leftW is the width of the chat column. The split is even, so the two
+// columns carry equal weight.
+func (m *model) leftW() int {
+	if m.width < paneMinTotal {
+		return m.width
+	}
+	return (m.width - paneGutter) / 2
+}
+
+// chatKind reports whether a block belongs in the chat column. Everything
+// else is work and lives on the right.
+func chatKind(k string) bool {
+	return k == "user" || k == "text" || k == "header"
+}
+
+// refresh re-renders both columns.
 func (m *model) refresh() {
 	if m.width == 0 {
 		return
@@ -260,29 +322,68 @@ func (m *model) refresh() {
 	if m.follow {
 		m.vp.GotoBottom()
 	}
+	if m.rightW() > 0 {
+		m.vpR.SetContent(m.renderWork())
+		if m.followR {
+			m.vpR.GotoBottom()
+		}
+	}
 }
 
+// render draws the chat column: what the user said, what the model replied,
+// and nothing else. The work column is drawn by renderWork.
 func (m *model) render() string {
 	var sb strings.Builder
-	w := m.width - 2*padX
-	if w < 20 {
-		w = 20
-	}
-	wrap := lipgloss.NewStyle().Width(w)
+	wrap := lipgloss.NewStyle().Width(m.colWidth(m.leftW()))
+	pane := m.rightW() > 0
 	for _, b := range m.blocks {
+		if pane && !chatKind(b.kind) {
+			continue
+		}
+		m.renderBlock(&sb, b, wrap)
+	}
+	if m.live != nil {
+		m.renderBlock(&sb, *m.live, wrap)
+	}
+	if !pane {
+		if m.liveTh != nil {
+			m.renderBlock(&sb, *m.liveTh, wrap)
+		}
+		if m.running {
+			sb.WriteString(padLeft(dim.Render(spinnerFrames[m.spinner%len(spinnerFrames)]+" working… (Esc to stop)"), false))
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// renderWork draws the work column: thinking, tool calls and their output,
+// notes and errors, in order and kept as scrollback. Ctrl+O expands it.
+func (m *model) renderWork() string {
+	var sb strings.Builder
+	wrap := lipgloss.NewStyle().Width(m.colWidth(m.rightW()))
+	for _, b := range m.blocks {
+		if chatKind(b.kind) {
+			continue
+		}
 		m.renderBlock(&sb, b, wrap)
 	}
 	if m.liveTh != nil {
 		m.renderBlock(&sb, *m.liveTh, wrap)
 	}
-	if m.live != nil {
-		m.renderBlock(&sb, *m.live, wrap)
-	}
 	if m.running {
-		sb.WriteString(padLeft(dim.Render(spinnerFrames[m.spinner%len(spinnerFrames)]+" working… (Esc to stop)"), false))
-		sb.WriteString("\n")
+		sb.WriteString(padLeft(dim.Render(spinnerFrames[m.spinner%len(spinnerFrames)]+" working… (Esc to stop)"), false) + "\n")
 	}
 	return sb.String()
+}
+
+// colWidth is the usable text width inside a column of the given size.
+func (m *model) colWidth(col int) int {
+	w := col - 2*padX
+	if w < 16 {
+		w = 16
+	}
+	return w
 }
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -294,14 +395,34 @@ func (m *model) renderBlock(sb *strings.Builder, b block, wrap lipgloss.Style) {
 		sb.WriteString(padLeft(wrap.Render(userText.Render(b.text)), true) + "\n\n")
 	case "text":
 		sb.WriteString(padLeft(asstSt.Render("pig"), false) + "\n")
-		sb.WriteString(padLeft(wrap.Render(asstSt.Render(b.text)), true) + "\n\n")
+		sb.WriteString(padLeft(wrap.Render(asstText.Render(b.text)), true) + "\n\n")
+	case "header":
+		sb.WriteString(padLeft(b.text, false) + "\n\n")
 	case "thinking":
-		if m.showThink {
+		if !m.showThink {
+			break
+		}
+		if m.showTools {
 			sb.WriteString(padLeft(wrap.Render(thinkSt.Render("thinking: "+strings.TrimSpace(b.text))), false) + "\n\n")
 		} else {
-			sb.WriteString(padLeft(dim.Render("thinking… (Ctrl+T to show)"), false) + "\n\n")
+			n := strings.Count(strings.TrimSpace(b.text), "\n") + 1
+			unit := "lines"
+			if n == 1 {
+				unit = "line"
+			}
+			sb.WriteString(padLeft(dim.Render(fmt.Sprintf("thinking… (%d %s · Ctrl+O to read)", n, unit)), false) + "\n\n")
 		}
 	case "tool":
+		// A finished tool collapses to one line, in step with the activity
+		// column that showed it running. Ctrl+O expands it again.
+		if b.done && !m.showTools {
+			mark, st := "✓", toolSt
+			if b.isErr {
+				mark, st = "✗", errSt
+			}
+			sb.WriteString(padLeft(st.Render("▶ "+b.name+" "+argsPreview(b.name, b.args)+"  "+mark), false) + "\n\n")
+			break
+		}
 		head := toolSt.Render("▶ " + b.name + " " + argsPreview(b.name, b.args))
 		sb.WriteString(padLeft(head, false) + "\n")
 		if b.output != "" {
@@ -354,25 +475,39 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
+// footer is the status line. Parts are dropped from the least useful end
+// until the line fits, so a narrow terminal loses the cwd rather than the
+// whole line; footerSt.Width would otherwise wrap and push the screen down
+// by a row. The model key is kept even when it alone is too wide.
 func (m *model) footer() string {
 	st := m.s.Stats()
 	q1, q2 := m.s.Agent.QueueTexts()
-	parts := []string{
-		m.s.Model().Key(),
-		"think:" + m.s.ThinkingLevel(),
-		fmt.Sprintf("ctx %.0f%%", st.ContextPercent),
-		fmt.Sprintf("$%.4f", st.Tokens.Cost),
-	}
-	if name := m.s.Store.Name(); name != "" {
-		parts = append(parts, name)
-	}
-	if n := len(q1) + len(q2); n > 0 {
-		parts = append(parts, fmt.Sprintf("queued %d", n))
+	var parts []string
+	if cwd := m.s.Opts.Cwd; cwd != "" {
+		parts = append(parts, cwd)
 	}
 	if m.status != "" && time.Since(m.statusAt) < 8*time.Second {
 		parts = append(parts, m.status)
 	}
+	if n := len(q1) + len(q2); n > 0 {
+		parts = append(parts, fmt.Sprintf("queued %d", n))
+	}
+	if name := m.s.Store.Name(); name != "" {
+		parts = append(parts, name)
+	}
+	parts = append(parts,
+		fmt.Sprintf("$%.4f", st.Tokens.Cost),
+		fmt.Sprintf("ctx %.0f%%", st.ContextPercent),
+		"think:"+m.s.ThinkingLevel(),
+		m.s.Model().Key(),
+	)
+	for len(parts) > 1 && ansi.StringWidth(" "+strings.Join(parts, "  │  ")) > m.width {
+		parts = parts[1:]
+	}
 	line := " " + strings.Join(parts, "  │  ")
+	if ansi.StringWidth(line) > m.width {
+		line = ansi.Truncate(line, m.width, "…")
+	}
 	return footerSt.Width(m.width).Render(line)
 }
 
@@ -388,19 +523,90 @@ func (m *model) View() string {
 }
 
 func (m *model) view() string {
+	if m.rightW() > 0 {
+		return m.splitView()
+	}
 	var sb strings.Builder
 	sb.WriteString(m.vp.View())
 	sb.WriteString("\n")
-	if m.pick != nil {
-		sb.WriteString(m.pick.view(m.width))
-	} else {
-		sb.WriteString(padLeft(m.ta.View(), false))
-		if hint := m.slashHint(); hint != "" {
-			sb.WriteString("\n" + padLeft(dim.Render(hint), false))
-		}
+	sb.WriteString(padLeft(m.ta.View(), false))
+	if hint := m.slashHint(); hint != "" {
+		sb.WriteString("\n" + padLeft(dim.Render(hint), false))
 	}
 	sb.WriteString("\n" + m.footer())
-	return sb.String()
+	out := sb.String()
+	if m.pick != nil {
+		out = overlay(out, m.pick.view(m.pickerWidth()), m.width, m.height)
+	}
+	return out
+}
+
+// splitView lays out the two columns. The work column runs the full height of
+// the body; the chat column is the transcript with the edit line beneath it,
+// so the editor never straddles the divider.
+func (m *model) splitView() string {
+	m.syncHeights()
+	var left strings.Builder
+	left.WriteString(m.vp.View())
+	left.WriteString("\n")
+	left.WriteString(padLeft(m.ta.View(), false))
+	if hint := m.slashHint(); hint != "" {
+		left.WriteString("\n" + padLeft(dim.Render(hint), false))
+	}
+	body := lipgloss.JoinHorizontal(lipgloss.Top, left.String(), m.gutter(m.bodyH()), m.vpR.View())
+	out := body + "\n" + m.footer()
+	if m.pick != nil {
+		out = overlay(out, m.pick.view(m.pickerWidth()), m.width, m.height)
+	}
+	return out
+}
+
+// gutter is the vertical divider between the two columns.
+func (m *model) gutter(h int) string {
+	bar := edge.Render("│") + " "
+	return strings.TrimSuffix(strings.Repeat(bar+"\n", h), "\n")
+}
+
+func (m *model) pickerWidth() int {
+	w := m.width - 8
+	if w > 88 {
+		w = 88
+	}
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+// overlay floats popup over base, centred, without disturbing the layout
+// underneath. Base lines keep whatever sits left and right of the popup.
+func overlay(base, popup string, w, h int) string {
+	bl := strings.Split(base, "\n")
+	pl := strings.Split(popup, "\n")
+	pw := lipgloss.Width(popup)
+	x := (w - pw) / 2
+	y := (h - len(pl)) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	for len(bl) < y+len(pl) {
+		bl = append(bl, "")
+	}
+	for i, p := range pl {
+		if y+i >= len(bl) {
+			break
+		}
+		left := ansi.Truncate(bl[y+i], x, "")
+		if n := x - ansi.StringWidth(left); n > 0 {
+			left += strings.Repeat(" ", n)
+		}
+		right := ansi.TruncateLeft(bl[y+i], x+pw, "")
+		bl[y+i] = left + p + right
+	}
+	return strings.Join(bl, "\n")
 }
 
 func (p *picker) view(width int) string {
@@ -465,6 +671,7 @@ var builtinCommands = []runtime.Command{
 	{Name: "login", Description: "save an API key: /login anthropic"},
 	{Name: "trust", Description: "trust this project's .pig folder"},
 	{Name: "hotkeys", Description: "show keyboard shortcuts"},
+	{Name: "extensions", Description: "list loaded extensions"},
 	{Name: "help", Description: "list commands"},
 	{Name: "quit", Description: "exit pig"},
 }
@@ -528,6 +735,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		os.Remove(msg.path)
 		return m, nil
 	case tea.MouseMsg:
+		if m.rightW() > 0 && msg.X >= m.leftW() {
+			var cmd tea.Cmd
+			m.vpR, cmd = m.vpR.Update(msg)
+			m.followR = m.vpR.AtBottom()
+			return m, cmd
+		}
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
 		m.follow = m.vp.AtBottom()
@@ -696,7 +909,20 @@ func (m *model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.completePath()
 		return m, nil
-	case "pgup", "pgdown", "ctrl+up", "ctrl+down":
+	case "pgup", "pgdown":
+		// The work column holds more to read, so it takes the plain keys;
+		// the chat column keeps Ctrl+Up/Ctrl+Down.
+		if m.rightW() == 0 {
+			var cmd tea.Cmd
+			m.vp, cmd = m.vp.Update(k)
+			m.follow = m.vp.AtBottom()
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.vpR, cmd = m.vpR.Update(k)
+		m.followR = m.vpR.AtBottom()
+		return m, cmd
+	case "ctrl+up", "ctrl+down":
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(k)
 		m.follow = m.vp.AtBottom()
@@ -841,6 +1067,17 @@ func (m *model) slashCommand(text string) (bool, tea.Cmd) {
 		}
 		sb.WriteString("  !cmd           run a shell command and share the output with the model\n  !!cmd          run a shell command privately")
 		m.note(sb.String())
+	case "extensions":
+		if m.s.Exts == nil || len(m.s.Exts.Extensions) == 0 {
+			m.note("no extensions loaded")
+		} else {
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("%d extension(s):", len(m.s.Exts.Extensions)))
+			for _, e := range m.s.Exts.Extensions {
+				sb.WriteString("\n  " + e.Ready.Name)
+			}
+			m.note(sb.String())
+		}
 	case "hotkeys":
 		m.note(strings.TrimSpace(`Keys:
   Enter          send (or steer while the model works)
@@ -851,12 +1088,13 @@ func (m *model) slashCommand(text string) (bool, tea.Cmd) {
   Ctrl+L         model picker (Ctrl+S inside it saves the default)
   Ctrl+P         next model
   Shift+Tab      next thinking level
-  Ctrl+O         expand/collapse tool output
-  Ctrl+T         show/hide thinking
+  Ctrl+O         expand/collapse work output and thinking
+  Ctrl+T         show/hide thinking entirely
   Ctrl+X         copy the last reply
   Ctrl+G         edit the prompt in $EDITOR
   Tab            complete a file path
-  PgUp/PgDn      scroll the transcript`))
+  PgUp/PgDn      scroll the work column
+  Ctrl+Up/Down   scroll the chat column`))
 	case "model":
 		if args == "" {
 			return true, m.openModelPicker()
