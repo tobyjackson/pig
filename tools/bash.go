@@ -11,7 +11,6 @@ import (
 	"github.com/tobyjackson/pig/ai"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 )
@@ -53,6 +52,70 @@ func (*Bash) Parameters() json.RawMessage {
 // would otherwise grow the buffer until the process ran out of memory.
 const maxCapturedOutput = 10 << 20
 
+// truncationMarkerReserve is the room kept for the marker boundedBuffer adds,
+// so String never returns more than the advertised limit.
+const truncationMarkerReserve = 256
+
+// boundedBuffer holds the start and the end of a stream, dropping the middle
+// once it grows past the limit. Keeping both ends matters: a build log's
+// failure is the last thing it prints, so a head-only cap would discard the
+// one line worth reading.
+type boundedBuffer struct {
+	limit   int
+	headCap int
+	head    []byte
+	tail    []byte
+	total   int
+}
+
+func newBoundedBuffer(limit int) *boundedBuffer {
+	return &boundedBuffer{limit: limit, headCap: limit / 2}
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	b.total += n
+	if remaining := b.headCap - len(b.head); remaining > 0 {
+		keep := min(remaining, len(p))
+		b.head = append(b.head, p[:keep]...)
+		p = p[keep:]
+	}
+	if len(p) > 0 {
+		tailCap := max(0, b.limit-b.headCap-truncationMarkerReserve)
+		if len(p) >= tailCap {
+			b.tail = append(b.tail[:0], p[len(p)-tailCap:]...)
+		} else {
+			b.tail = append(b.tail, p...)
+			if len(b.tail) > tailCap {
+				b.tail = append(b.tail[:0], b.tail[len(b.tail)-tailCap:]...)
+			}
+		}
+	}
+	return n, nil
+}
+
+// dropped reports whether anything was discarded. The marker lives in String,
+// so callers check this rather than comparing lengths.
+func (b *boundedBuffer) dropped() bool {
+	return b.total > len(b.head)+len(b.tail)
+}
+
+func (b *boundedBuffer) String() string {
+	if !b.dropped() {
+		return string(b.head) + string(b.tail)
+	}
+	omitted := b.total - len(b.head) - len(b.tail)
+	marker := fmt.Sprintf("\n\n[%s of output omitted: showing the first %s and the last %s]\n\n",
+		FormatSize(omitted), FormatSize(len(b.head)), FormatSize(len(b.tail)))
+	return string(b.head) + marker + string(b.tail)
+}
+
+// pipeQuietPeriod is how long Run keeps draining after the child exits before
+// concluding that something else still holds the write end open. It only
+// elapses on a command that leaves a background process behind; a normal
+// command reaches EOF immediately.
+const pipeQuietPeriod = 250 * time.Millisecond
+
 // Run executes a command, streaming output to onData, and returns the exit
 // code. A zero timeout means none. The whole process group is killed on
 // cancel or timeout.
@@ -85,6 +148,7 @@ func (b *Bash) Run(ctx context.Context, command string, timeout time.Duration, o
 	}
 	pw.Close()
 	var wg sync.WaitGroup
+	progress := make(chan struct{}, 1)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -92,6 +156,10 @@ func (b *Bash) Run(ctx context.Context, command string, timeout time.Duration, o
 		for {
 			n, err := pr.Read(buf)
 			if n > 0 {
+				select {
+				case progress <- struct{}{}:
+				default:
+				}
 				onData(buf[:n])
 			}
 			if err != nil {
@@ -108,8 +176,38 @@ func (b *Bash) Run(ctx context.Context, command string, timeout time.Duration, o
 		killProcessGroup(cmd)
 		waitErr = <-done
 	}
+	// The child exiting does not mean the pipe is empty: the kernel can still
+	// hold a buffer of unread output, and closing the read end here would throw
+	// it away, losing exactly the trailing lines that explain a failure. Give
+	// the reader until it goes quiet. A background process that inherited the
+	// write end holds the pipe open forever, so waiting for EOF unconditionally
+	// would stall every `cmd &` instead.
+	drained := make(chan struct{})
+	go func() { wg.Wait(); close(drained) }()
+	quiet := time.NewTimer(pipeQuietPeriod)
+	defer quiet.Stop()
+	for draining := true; draining; {
+		select {
+		case <-drained:
+			draining = false
+		case <-progress:
+			if !quiet.Stop() {
+				select {
+				case <-quiet.C:
+				default:
+				}
+			}
+			quiet.Reset(pipeQuietPeriod)
+		case <-quiet.C:
+			draining = false
+		}
+	}
 	pr.Close()
-	wg.Wait()
+	return b.finish(ctx, waitErr)
+}
+
+// finish maps a completed command to its exit status and error.
+func (b *Bash) finish(ctx context.Context, waitErr error) (int, error) {
 	if ctx.Err() != nil {
 		return -1, ctx.Err()
 	}
@@ -137,24 +235,23 @@ func (b *Bash) Execute(ctx context.Context, _ string, args json.RawMessage, onUp
 		return ErrorResult("bash: a command is required")
 	}
 	var mu sync.Mutex
-	var sb strings.Builder
-	capped := false
+	buf := newBoundedBuffer(maxCapturedOutput)
 	last := time.Time{}
 	code, err := b.Run(ctx, in.Command, time.Duration(in.Timeout*float64(time.Second)), func(p []byte) {
 		mu.Lock()
-		if sb.Len() < maxCapturedOutput {
-			sb.Write(p)
-		} else {
-			capped = true
-		}
-		snapshot := sb.String()
-		mu.Unlock()
-		if onUpdate != nil && time.Since(last) > 250*time.Millisecond {
+		_, _ = buf.Write(p)
+		emit := onUpdate != nil && time.Since(last) > 250*time.Millisecond
+		var snapshot string
+		if emit {
 			last = time.Now()
+			snapshot = buf.String()
+		}
+		mu.Unlock()
+		if emit {
 			onUpdate(TextResult(TruncateTail(snapshot).Content))
 		}
 	})
-	output := sb.String()
+	output := buf.String()
 	t := TruncateTail(output)
 	text := t.Content
 	var details map[string]any
@@ -164,8 +261,8 @@ func (b *Bash) Execute(ctx context.Context, _ string, args json.RawMessage, onUp
 		start := t.TotalLines - t.OutputLines + 1
 		text += fmt.Sprintf("\n\n[Showing lines %d-%d of %d. Full output: %s]", start, t.TotalLines, t.TotalLines, path)
 	}
-	if capped {
-		text += fmt.Sprintf("\n\n[Output was cut at %s; later output was not kept.]", FormatSize(maxCapturedOutput))
+	if buf.dropped() {
+		text += fmt.Sprintf("\n\n[Output exceeded %s; the middle was dropped and both ends kept.]", FormatSize(maxCapturedOutput))
 	}
 	status := func(s string) string {
 		if text == "" {

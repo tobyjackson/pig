@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 func TestTruncateHeadLines(t *testing.T) {
@@ -30,6 +33,32 @@ func TestTruncateTailBytes(t *testing.T) {
 	}
 	if !strings.HasSuffix(tr.Content, strings.Repeat("x", 1000)) {
 		t.Fatal("tail should keep the last line whole")
+	}
+}
+
+// A single line longer than the byte limit is cut mid-line, and the cut must
+// not land inside a multi-byte rune: the model would receive U+FFFD.
+func TestTruncateTailSplitsOnRuneBoundary(t *testing.T) {
+	line := strings.Repeat("\u20ac", 20000) // 60000 bytes of 3-byte runes
+	tr := TruncateTail(line)
+	if !tr.LastLinePartial {
+		t.Fatal("expected a partial line")
+	}
+	if !utf8.ValidString(tr.Content) {
+		t.Fatalf("cut split a rune: first bytes %q", tr.Content[:min(6, len(tr.Content))])
+	}
+	if len(tr.Content) > MaxBytes {
+		t.Fatalf("kept %d bytes, over the %d limit", len(tr.Content), MaxBytes)
+	}
+}
+
+// A line that was never valid UTF-8 must not be stripped to nothing: the
+// boundary search gives up after utf8.UTFMax-1 bytes.
+func TestTruncateTailKeepsBinaryLine(t *testing.T) {
+	line := strings.Repeat("\xff", 60000)
+	tr := TruncateTail(line)
+	if len(tr.Content) < MaxBytes-(utf8.UTFMax-1) {
+		t.Fatalf("binary line was stripped: got %d, want about %d", len(tr.Content), MaxBytes)
 	}
 }
 
@@ -133,8 +162,74 @@ func TestBashOutputIsCapped(t *testing.T) {
 	b := NewBash(t.TempDir(), "")
 	// yes prints forever; head limits it to well over the cap.
 	res := b.Execute(context.Background(), "1", json.RawMessage(`{"command":"yes x | head -c 12000000","timeout":30}`), nil)
-	if !strings.Contains(res.Content[0].Text, "was cut at") {
+	if !strings.Contains(res.Content[0].Text, "the middle was dropped") {
 		t.Fatalf("flooded output should report the cap: %q", res.Content[0].Text[:min(200, len(res.Content[0].Text))])
+	}
+}
+
+// The point of keeping both ends: a command whose useful output is its last
+// line still shows that line after the cap fires. A head-only cap loses it.
+func TestBashCapKeepsTail(t *testing.T) {
+	b := NewBash(t.TempDir(), "")
+	cmd := `echo FIRST_LINE; yes filler | head -c 12000000; echo LAST_LINE`
+	res := b.Execute(context.Background(), "1", json.RawMessage(`{"command":`+strconv.Quote(cmd)+`,"timeout":30}`), nil)
+	got := res.Content[0].Text
+	if !strings.Contains(got, "LAST_LINE") {
+		t.Fatalf("the last line was lost: %q", got[max(0, len(got)-200):])
+	}
+	if !strings.Contains(got, "the middle was dropped") {
+		t.Fatal("the drop was not reported")
+	}
+}
+
+// The child exiting does not mean the pipe is empty. Output still sitting in
+// the kernel buffer must reach the caller, or a failing command's last lines
+// are lost.
+func TestBashKeepsOutputAfterExit(t *testing.T) {
+	b := NewBash(t.TempDir(), "")
+	var sb strings.Builder
+	code, err := b.Run(context.Background(), `echo FIRST_LINE; yes filler | head -c 12000000; echo LAST_LINE`, 0, func(p []byte) { sb.Write(p) })
+	if code != 0 || err != nil {
+		t.Fatalf("code=%d err=%v", code, err)
+	}
+	got := sb.String()
+	if !strings.Contains(got, "LAST_LINE") {
+		t.Fatalf("trailing output lost: %d bytes captured", len(got))
+	}
+	if !strings.Contains(got, "FIRST_LINE") {
+		t.Fatal("leading output lost")
+	}
+}
+
+// A background process inherits the write end, so the pipe never reaches EOF.
+// Waiting for it would stall every `cmd &` on the quiet period.
+func TestBashDoesNotWaitForBackgroundHolder(t *testing.T) {
+	b := NewBash(t.TempDir(), "")
+	start := time.Now()
+	var sb strings.Builder
+	if _, err := b.Run(context.Background(), `sleep 30 & echo done`, 0, func(p []byte) { sb.Write(p) }); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("waited %s on a background holder", took)
+	}
+	if !strings.Contains(sb.String(), "done") {
+		t.Fatalf("lost output: %q", sb.String())
+	}
+}
+
+// Output that keeps arriving must not be cut short by the quiet timer.
+func TestBashKeepsSlowOutput(t *testing.T) {
+	b := NewBash(t.TempDir(), "")
+	var sb strings.Builder
+	cmd := `for i in 1 2 3 4 5; do echo "chunk$i"; sleep 0.1; done`
+	if _, err := b.Run(context.Background(), cmd, 0, func(p []byte) { sb.Write(p) }); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"chunk1", "chunk3", "chunk5"} {
+		if !strings.Contains(sb.String(), want) {
+			t.Fatalf("lost %s: %q", want, sb.String())
+		}
 	}
 }
 

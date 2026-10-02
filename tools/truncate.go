@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Output limits. Whichever is hit first wins.
@@ -83,6 +84,28 @@ func TruncateHead(s string) Truncation {
 	return t
 }
 
+// tailBytes returns the last n bytes of s, moved forward to the next rune
+// boundary so the result is valid UTF-8. A cut inside a multi-byte rune would
+// otherwise reach the model as U+FFFD replacement characters.
+//
+// At most utf8.UTFMax-1 bytes are dropped: a valid rune is never longer than
+// that, so a line that is still invalid afterwards was never valid UTF-8 to
+// begin with (a binary file), and there is no boundary to find.
+func tailBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	s = s[len(s)-n:]
+	for i := 0; i < utf8.UTFMax-1 && len(s) > 0 && !utf8.ValidString(s); i++ {
+		_, size := utf8.DecodeRuneInString(s)
+		s = s[size:]
+	}
+	return s
+}
+
 // TruncateTail keeps the last lines that fit. Good for command output.
 func TruncateTail(s string) Truncation {
 	lines := splitLines(s)
@@ -101,9 +124,10 @@ func TruncateTail(s string) Truncation {
 		if bytes+add > MaxBytes {
 			t.TruncatedBy = "bytes"
 			if len(out) == 0 {
-				// One giant line: keep its tail bytes.
+				// One giant line: keep its tail bytes, cut on a rune boundary so
+				// the model is not handed mangled text.
 				line := lines[i]
-				out = append(out, line[len(line)-MaxBytes:])
+				out = append(out, tailBytes(line, MaxBytes))
 				t.LastLinePartial = true
 			}
 			break
